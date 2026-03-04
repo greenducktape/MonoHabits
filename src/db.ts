@@ -84,77 +84,74 @@ class PostgresAdapter {
   private sql: any;
 
   async init() {
-    const { sql } = await import('@vercel/postgres');
-    this.sql = sql;
+    try {
+      console.log('PostgresAdapter: Importing @vercel/postgres...');
+      const { sql } = await import('@vercel/postgres');
+      this.sql = sql;
+      console.log('PostgresAdapter: @vercel/postgres imported.');
 
-    // Initialize Database Schema
-    // Note: In Postgres, we use SERIAL for auto-increment and specific types
-    await this.sql`
-      CREATE TABLE IF NOT EXISTS users (
-        id SERIAL PRIMARY KEY,
-        google_id TEXT UNIQUE NOT NULL,
-        email TEXT NOT NULL,
-        name TEXT,
-        picture TEXT,
-        password TEXT,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      );
-    `;
-    
-    await this.sql`
-      CREATE TABLE IF NOT EXISTS habits (
-        id SERIAL PRIMARY KEY,
-        user_id INTEGER,
-        title TEXT NOT NULL,
-        frequency TEXT DEFAULT 'daily',
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        archived INTEGER DEFAULT 0,
-        FOREIGN KEY (user_id) REFERENCES users (id)
-      );
-    `;
+      // Initialize Database Schema
+      console.log('PostgresAdapter: Initializing schema...');
+      await this.sql`
+        CREATE TABLE IF NOT EXISTS users (
+          id SERIAL PRIMARY KEY,
+          google_id TEXT UNIQUE NOT NULL,
+          email TEXT NOT NULL,
+          name TEXT,
+          picture TEXT,
+          password TEXT,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+      `;
+      
+      await this.sql`
+        CREATE TABLE IF NOT EXISTS habits (
+          id SERIAL PRIMARY KEY,
+          user_id INTEGER,
+          title TEXT NOT NULL,
+          frequency TEXT DEFAULT 'daily',
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          archived INTEGER DEFAULT 0,
+          FOREIGN KEY (user_id) REFERENCES users (id)
+        );
+      `;
 
-    await this.sql`
-      CREATE TABLE IF NOT EXISTS completions (
-        id SERIAL PRIMARY KEY,
-        habit_id INTEGER NOT NULL,
-        user_id INTEGER,
-        date TEXT NOT NULL,
-        completed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (habit_id) REFERENCES habits (id),
-        FOREIGN KEY (user_id) REFERENCES users (id)
-      );
-    `;
+      await this.sql`
+        CREATE TABLE IF NOT EXISTS completions (
+          id SERIAL PRIMARY KEY,
+          habit_id INTEGER NOT NULL,
+          user_id INTEGER,
+          date TEXT NOT NULL,
+          completed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (habit_id) REFERENCES habits (id),
+          FOREIGN KEY (user_id) REFERENCES users (id)
+        );
+      `;
+      console.log('PostgresAdapter: Schema initialized.');
+    } catch (error) {
+      console.error('PostgresAdapter: Initialization failed:', error);
+      throw error;
+    }
   }
 
   async query(text: string, params: any[] = []): Promise<QueryResult> {
-    // Vercel Postgres uses template literals or parameterized queries
-    // We need to be careful here. The `sql` tag function expects a template literal.
-    // However, the `client.query` method accepts text and params.
-    // We'll use the underlying client for raw queries to support dynamic SQL.
-    
-    // Note: @vercel/postgres `sql` is a tagged template literal.
-    // To execute a raw query string with parameters, we can use `db.query`.
-    // But `db` isn't directly exported, `sql` is.
-    // We can use `sql.query(text, params)`.
-    
-    const result = await this.sql.query(text, params);
-    
-    // Normalize result
-    // Postgres returns rows. Insert/Update returns rowCount.
-    // To get lastInsertId in Postgres, we usually need `RETURNING id`.
-    // Our app expects `lastInsertRowid`.
-    // We will need to adjust our INSERT queries to include `RETURNING id`.
-    
-    let lastInsertRowid: number | undefined;
-    if (result.rows.length > 0 && (text.toUpperCase().includes('INSERT') || text.toUpperCase().includes('RETURNING'))) {
-       lastInsertRowid = result.rows[0].id;
-    }
+    try {
+      const result = await this.sql.query(text, params);
+      
+      let lastInsertRowid: number | undefined;
+      if (result.rows.length > 0 && (text.toUpperCase().includes('INSERT') || text.toUpperCase().includes('RETURNING'))) {
+         lastInsertRowid = result.rows[0].id;
+      }
 
-    return {
-      rows: result.rows,
-      lastInsertRowid,
-      changes: result.rowCount || 0
-    };
+      return {
+        rows: result.rows,
+        lastInsertRowid,
+        changes: result.rowCount || 0
+      };
+    } catch (error) {
+      console.error('PostgresAdapter: Query failed:', { text, params, error });
+      throw error;
+    }
   }
 }
 
