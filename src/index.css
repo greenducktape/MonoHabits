@@ -1,0 +1,78 @@
+@import url('https://fonts.googleapis.com/css2?family=Archivo+Black&family=Cormorant+Garamond:ital,wght@0,400;0,600;1,400;1,600&family=Inter:wght@400;500;600&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-serif: "Cormorant Garamond", ui-serif, Georgia, serif;
+  --font-display: "Archivo Black", ui-sans-serif, system-ui, sans-serif;
+}
+
+:root {
+  --color-bg: #F5F5F0;
+  --color-text: #000000;
+  --color-border: #000000;
+}
+
+body {
+  background-color: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Primary Colors */
+.bg-electric-blue { background-color: #0033FF; }
+.bg-signal-yellow { background-color: #FFCC00; }
+.bg-bold-red { background-color: #FF2A00; }
+.bg-racing-green { background-color: #00592D; }
+
+.text-electric-blue { color: #0033FF; }
+.text-signal-yellow { color: #FFCC00; }
+.text-bold-red { color: #FF2A00; }
+.text-racing-green { color: #00592D; }
+
+.border-electric-blue { border-color: #0033FF; }
+.border-signal-yellow { border-color: #FFCC00; }
+.border-bold-red { border-color: #FF2A00; }
+.border-racing-green { border-color: #00592D; }
+
+/* Habit Item Styles */
+.habit-item {
+  border: 3px solid #000000;
+  transition: all 0.2s cubic-bezier(0.25, 1, 0.5, 1);
+  box-shadow: 4px 4px 0px #000000;
+}
+
+.habit-item:active {
+  transform: translate(2px, 2px);
+  box-shadow: 2px 2px 0px #000000;
+}
+
+.habit-item.is-active {
+  color: #FFFFFF;
+}
+
+.habit-item.is-active.bg-signal-yellow {
+  color: #000000;
+}
+
+.habit-checkbox {
+  border: 3px solid #000000;
+  background-color: #FFFFFF;
+}
+
+.habit-item.is-active .habit-checkbox {
+  background-color: #000000;
+  border-color: #000000;
+}
+
+.habit-item.is-active .check-icon {
+  color: #FFFFFF;
+}
+
+.habit-item.is-active.bg-signal-yellow .habit-checkbox {
+  background-color: #000000;
+}
+.habit-item.is-active.bg-signal-yellow .check-icon {
+  color: #FFCC00;
+}
