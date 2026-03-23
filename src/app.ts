@@ -4,14 +4,19 @@ import { fileURLToPath } from 'url';
 import cookieParser from 'cookie-parser';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
-import { getDb } from './db';
+import { getDb } from './db.ts';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const JWT_SECRET = process.env.JWT_SECRET || 'super-secret-key-for-dev';
 
 // Middleware to authenticate user
 const requireAuth = (req: any, res: any, next: any) => {
-  const token = req.cookies.auth_token;
+  let token = req.cookies.auth_token;
+  if (!token && req.headers.authorization) {
+    if (req.headers.authorization.startsWith('Bearer ')) {
+      token = req.headers.authorization.split(' ')[1];
+    }
+  }
   if (!token) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
@@ -25,11 +30,8 @@ const requireAuth = (req: any, res: any, next: any) => {
 };
 
 export const createApp = async () => {
-  console.log('createApp: Starting...');
   const app = express();
-  console.log('createApp: Getting DB...');
   const db = await getDb();
-  console.log('createApp: DB initialized.');
 
   app.use(express.json());
   app.use(cookieParser());
@@ -49,14 +51,15 @@ export const createApp = async () => {
 
       const hashedPassword = await bcrypt.hash(password, 10);
       const google_id = 'local:' + email; 
+      const recoveryCode = Math.random().toString(36).substring(2, 10).toUpperCase();
       
       const result = await db.query(
-        'INSERT INTO users (google_id, email, password) VALUES ($1, $2, $3) RETURNING id', 
-        [google_id, email, hashedPassword]
+        'INSERT INTO users (google_id, email, password, recovery_code) VALUES ($1, $2, $3, $4) RETURNING id', 
+        [google_id, email, hashedPassword, recoveryCode]
       );
       
       const userId = result.lastInsertRowid || result.rows[0]?.id;
-      const user = { id: userId, email };
+      const user = { id: userId, email, recoveryCode };
 
       const authToken = jwt.sign({ id: user.id, email: user.email }, JWT_SECRET, { expiresIn: '7d' });
       res.cookie('auth_token', authToken, {
@@ -66,7 +69,7 @@ export const createApp = async () => {
         maxAge: 7 * 24 * 60 * 60 * 1000
       });
 
-      res.json({ success: true, user });
+      res.json({ success: true, user, token: authToken });
     } catch (err) {
       console.error('Register error:', err);
       res.status(500).json({ error: 'Registration failed' });
@@ -100,10 +103,31 @@ export const createApp = async () => {
         maxAge: 7 * 24 * 60 * 60 * 1000
       });
 
-      res.json({ success: true, user: { id: user.id, email: user.email, name: user.name } });
+      res.json({ success: true, user: { id: user.id, email: user.email, name: user.name }, token: authToken });
     } catch (err) {
       console.error('Login error:', err);
       res.status(500).json({ error: 'Login failed' });
+    }
+  });
+
+  app.post('/api/auth/reset-password', async (req, res) => {
+    const { email, recoveryCode, newPassword } = req.body;
+    if (!email || !recoveryCode || !newPassword) {
+      return res.status(400).json({ error: 'Email, recovery code, and new password are required' });
+    }
+
+    try {
+      const result = await db.query('SELECT id FROM users WHERE email = $1 AND recovery_code = $2', [email, recoveryCode]);
+      if (result.rows.length === 0) {
+        return res.status(404).json({ error: 'Invalid email or recovery code' });
+      }
+
+      const hashedPassword = await bcrypt.hash(newPassword, 10);
+      await db.query('UPDATE users SET password = $1 WHERE email = $2', [hashedPassword, email]);
+      res.json({ success: true });
+    } catch (err) {
+      console.error('Reset password error:', err);
+      res.status(500).json({ error: 'Password reset failed' });
     }
   });
 
@@ -134,17 +158,51 @@ export const createApp = async () => {
   app.get('/api/habits', requireAuth, async (req: any, res) => {
     const habitsResult = await db.query('SELECT * FROM habits WHERE archived = 0 AND user_id = $1 ORDER BY created_at DESC', [req.user.id]);
     
-    const today = new Date().toISOString().split('T')[0];
-    const completionsResult = await db.query('SELECT habit_id FROM completions WHERE date = $1 AND user_id = $2', [today, req.user.id]);
-    
-    const completedIds = new Set(completionsResult.rows.map((c: any) => c.habit_id));
+    // Get the latest completion date for the user
+    const maxDateResult = await db.query('SELECT MAX(date) as max_date FROM completions WHERE user_id = $1', [req.user.id]);
+    const maxDateStr = maxDateResult.rows[0]?.max_date;
 
-    const habitsWithStatus = habitsResult.rows.map((h: any) => ({
-      ...h,
-      completed: completedIds.has(h.id)
-    }));
+    // Get the latest completion date for each habit
+    const lastCompletionResult = await db.query('SELECT habit_id, MAX(date) as last_date FROM completions WHERE user_id = $1 GROUP BY habit_id', [req.user.id]);
+    const lastCompletionMap = new Map(lastCompletionResult.rows.map((r: any) => [r.habit_id, r.last_date]));
+
+    const today = new Date().toISOString().split('T')[0];
+    const completionsResult = await db.query('SELECT habit_id, status FROM completions WHERE date = $1 AND user_id = $2', [today, req.user.id]);
+    
+    const completionsMap = new Map(completionsResult.rows.map((c: any) => [c.habit_id, c.status || 'completed']));
+
+    let thresholdDateStr: string | null = null;
+    if (maxDateStr) {
+      const maxDate = new Date(maxDateStr);
+      maxDate.setDate(maxDate.getDate() - 30);
+      thresholdDateStr = maxDate.toISOString().split('T')[0];
+    }
+
+    const habitsWithStatus = habitsResult.rows
+      .filter((h: any) => {
+        if (!thresholdDateStr) return true; // No completions at all, show everything
+        const lastDate = lastCompletionMap.get(h.id);
+        if (!lastDate) return true; // Habit has no completions (newly created), show it
+        return lastDate >= thresholdDateStr; // Only show if active in the last 30 days of the latest activity
+      })
+      .map((h: any) => ({
+        ...h,
+        completed: completionsMap.has(h.id) && completionsMap.get(h.id) === 'completed',
+        status: completionsMap.get(h.id) || null
+      }));
 
     res.json(habitsWithStatus);
+  });
+
+  app.get('/api/habits/archived', requireAuth, async (req: any, res) => {
+    const habitsResult = await db.query('SELECT * FROM habits WHERE archived = 1 AND user_id = $1 ORDER BY created_at DESC', [req.user.id]);
+    res.json(habitsResult.rows);
+  });
+
+  app.post('/api/habits/:id/restore', requireAuth, async (req: any, res) => {
+    const { id } = req.params;
+    await db.query('UPDATE habits SET archived = 0 WHERE id = $1 AND user_id = $2', [id, req.user.id]);
+    res.json({ success: true });
   });
 
   app.post('/api/habits', requireAuth, async (req: any, res) => {
@@ -181,6 +239,33 @@ export const createApp = async () => {
     res.json({ success: true });
   });
 
+  app.post('/api/habits/:id/skip', requireAuth, async (req: any, res) => {
+    const { id } = req.params;
+    const { date } = req.body; // YYYY-MM-DD
+    const targetDate = date || new Date().toISOString().split('T')[0];
+
+    const habitResult = await db.query('SELECT id FROM habits WHERE id = $1 AND user_id = $2', [id, req.user.id]);
+    if (habitResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Habit not found' });
+    }
+
+    const checkResult = await db.query('SELECT id, status FROM completions WHERE habit_id = $1 AND date = $2 AND user_id = $3', [id, targetDate, req.user.id]);
+    const existing = checkResult.rows[0];
+
+    if (existing) {
+      if (existing.status === 'skipped') {
+        await db.query('DELETE FROM completions WHERE id = $1 AND user_id = $2', [existing.id, req.user.id]);
+        res.json({ status: null, completed: false });
+      } else {
+        await db.query('UPDATE completions SET status = $1 WHERE id = $2 AND user_id = $3', ['skipped', existing.id, req.user.id]);
+        res.json({ status: 'skipped', completed: false });
+      }
+    } else {
+      await db.query('INSERT INTO completions (habit_id, user_id, date, status) VALUES ($1, $2, $3, $4)', [id, req.user.id, targetDate, 'skipped']);
+      res.json({ status: 'skipped', completed: false });
+    }
+  });
+
   app.post('/api/habits/:id/toggle', requireAuth, async (req: any, res) => {
     const { id } = req.params;
     const { date } = req.body; // YYYY-MM-DD
@@ -191,25 +276,94 @@ export const createApp = async () => {
       return res.status(404).json({ error: 'Habit not found' });
     }
 
-    const checkResult = await db.query('SELECT id FROM completions WHERE habit_id = $1 AND date = $2 AND user_id = $3', [id, targetDate, req.user.id]);
+    const checkResult = await db.query('SELECT id, status FROM completions WHERE habit_id = $1 AND date = $2 AND user_id = $3', [id, targetDate, req.user.id]);
     const existing = checkResult.rows[0];
 
     if (existing) {
-      await db.query('DELETE FROM completions WHERE id = $1 AND user_id = $2', [existing.id, req.user.id]);
-      res.json({ completed: false });
+      if (existing.status === 'completed') {
+        await db.query('DELETE FROM completions WHERE id = $1 AND user_id = $2', [existing.id, req.user.id]);
+        res.json({ completed: false, status: null });
+      } else {
+        await db.query('UPDATE completions SET status = $1 WHERE id = $2 AND user_id = $3', ['completed', existing.id, req.user.id]);
+        res.json({ completed: true, status: 'completed' });
+      }
     } else {
-      await db.query('INSERT INTO completions (habit_id, user_id, date) VALUES ($1, $2, $3)', [id, req.user.id, targetDate]);
-      res.json({ completed: true });
+      await db.query('INSERT INTO completions (habit_id, user_id, date, status) VALUES ($1, $2, $3, $4)', [id, req.user.id, targetDate, 'completed']);
+      res.json({ completed: true, status: 'completed' });
     }
   });
 
   app.get('/api/stats', requireAuth, async (req: any, res) => {
-    const completionsResult = await db.query('SELECT date, COUNT(*) as count FROM completions WHERE user_id = $1 GROUP BY date', [req.user.id]);
-    const activeHabitsResult = await db.query('SELECT COUNT(*) as count FROM habits WHERE archived = 0 AND user_id = $1', [req.user.id]);
+    const completionsResult = await db.query("SELECT date, COUNT(*) as count FROM completions WHERE user_id = $1 AND status = 'completed' GROUP BY date", [req.user.id]);
+    const habitsResult = await db.query('SELECT id, created_at FROM habits WHERE archived = 0 AND user_id = $1', [req.user.id]);
     
+    // Get the latest completion date for the user
+    const maxDateResult = await db.query('SELECT MAX(date) as max_date FROM completions WHERE user_id = $1', [req.user.id]);
+    const maxDateStr = maxDateResult.rows[0]?.max_date;
+
+    // Get the latest completion date for each habit
+    const lastCompletionResult = await db.query('SELECT habit_id, MAX(date) as last_date FROM completions WHERE user_id = $1 GROUP BY habit_id', [req.user.id]);
+    const lastCompletionMap = new Map(lastCompletionResult.rows.map((r: any) => [r.habit_id, r.last_date]));
+
+    let thresholdDateStr: string | null = null;
+    if (maxDateStr) {
+      const maxDate = new Date(maxDateStr);
+      maxDate.setDate(maxDate.getDate() - 30);
+      thresholdDateStr = maxDate.toISOString().split('T')[0];
+    }
+
+    const activeHabitsCount = habitsResult.rows.filter((h: any) => {
+      if (!thresholdDateStr) return true;
+      const lastDate = lastCompletionMap.get(h.id);
+      if (!lastDate) return true;
+      return lastDate >= thresholdDateStr;
+    }).length;
+
+    const activeHabitsPerMonthResult = await db.query(`
+      SELECT SUBSTR(date, 1, 7) as month, COUNT(DISTINCT habit_id) as count 
+      FROM completions 
+      WHERE user_id = $1 
+      GROUP BY SUBSTR(date, 1, 7)
+    `, [req.user.id]);
+
+    const totalCompletedResult = await db.query("SELECT COUNT(*) as count FROM completions WHERE user_id = $1 AND status = 'completed'", [req.user.id]);
+    const totalRecordsResult = await db.query("SELECT COUNT(*) as count FROM completions WHERE user_id = $1", [req.user.id]);
+    
+    const totalCompleted = parseInt(totalCompletedResult.rows[0]?.count || '0');
+    const totalRecords = parseInt(totalRecordsResult.rows[0]?.count || '0');
+    const completionRate = totalRecords > 0 ? Math.round((totalCompleted / totalRecords) * 100) : 0;
+
+    // Calculate current streak (days in a row with at least 1 completion)
+    const datesWithCompletions = completionsResult.rows.map((r: any) => r.date).sort().reverse();
+    let currentStreak = 0;
+    
+    const today = new Date();
+    const todayStr = today.toISOString().split('T')[0];
+    const yesterday = new Date(today);
+    yesterday.setDate(yesterday.getDate() - 1);
+    const yesterdayStr = yesterday.toISOString().split('T')[0];
+
+    let checkDate = new Date(today);
+    let checkDateStr = todayStr;
+
+    // If no completion today, maybe the streak is still alive from yesterday
+    if (!datesWithCompletions.includes(todayStr) && datesWithCompletions.includes(yesterdayStr)) {
+      checkDate = new Date(yesterday);
+      checkDateStr = yesterdayStr;
+    }
+
+    while (datesWithCompletions.includes(checkDateStr)) {
+      currentStreak++;
+      checkDate.setDate(checkDate.getDate() - 1);
+      checkDateStr = checkDate.toISOString().split('T')[0];
+    }
+
     res.json({
       heatmap: completionsResult.rows,
-      totalHabits: parseInt(activeHabitsResult.rows[0]?.count || '0')
+      totalHabits: activeHabitsCount,
+      activeHabitsPerMonth: activeHabitsPerMonthResult.rows,
+      completionRate,
+      currentStreak
     });
   });
 
@@ -241,7 +395,9 @@ export const createApp = async () => {
       for (const habitId of habitIds) {
         const threshold = habitId === habitIds[0] ? 0.2 : 0.5;
         if (Math.random() > threshold) { 
-          await db.query('INSERT INTO completions (habit_id, user_id, date) VALUES ($1, $2, $3)', [habitId, req.user.id, dateStr]);
+          await db.query('INSERT INTO completions (habit_id, user_id, date, status) VALUES ($1, $2, $3, $4)', [habitId, req.user.id, dateStr, 'completed']);
+        } else {
+          await db.query('INSERT INTO completions (habit_id, user_id, date, status) VALUES ($1, $2, $3, $4)', [habitId, req.user.id, dateStr, 'skipped']);
         }
       }
       current.setDate(current.getDate() + 1);
@@ -280,16 +436,23 @@ export const createApp = async () => {
         if (habitId) {
           const shouldBeCompleted = item.completed !== false;
 
+          const checkResult = await db.query('SELECT id, status FROM completions WHERE habit_id = $1 AND date = $2 AND user_id = $3', [habitId, item.date, req.user.id]);
+          const existing = checkResult.rows[0];
+
           if (shouldBeCompleted) {
-            const checkResult = await db.query('SELECT id FROM completions WHERE habit_id = $1 AND date = $2 AND user_id = $3', [habitId, item.date, req.user.id]);
-            if (checkResult.rows.length === 0) {
-              await db.query('INSERT INTO completions (habit_id, user_id, date) VALUES ($1, $2, $3)', [habitId, req.user.id, item.date]);
+            if (!existing) {
+              await db.query('INSERT INTO completions (habit_id, user_id, date, status) VALUES ($1, $2, $3, $4)', [habitId, req.user.id, item.date, 'completed']);
+              importedCount++;
+            } else if (existing.status !== 'completed') {
+              await db.query('UPDATE completions SET status = $1 WHERE id = $2', ['completed', existing.id]);
               importedCount++;
             }
           } else {
-            const checkResult = await db.query('SELECT id FROM completions WHERE habit_id = $1 AND date = $2 AND user_id = $3', [habitId, item.date, req.user.id]);
-            if (checkResult.rows.length > 0) {
-              await db.query('DELETE FROM completions WHERE habit_id = $1 AND date = $2 AND user_id = $3', [habitId, item.date, req.user.id]);
+            if (!existing) {
+              await db.query('INSERT INTO completions (habit_id, user_id, date, status) VALUES ($1, $2, $3, $4)', [habitId, req.user.id, item.date, 'skipped']);
+              importedCount++;
+            } else if (existing.status !== 'skipped') {
+              await db.query('UPDATE completions SET status = $1 WHERE id = $2', ['skipped', existing.id]);
               importedCount++;
             }
           }

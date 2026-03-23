@@ -24,6 +24,7 @@ class SQLiteAdapter {
         name TEXT,
         picture TEXT,
         password TEXT,
+        recovery_code TEXT,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
       );
 
@@ -42,16 +43,23 @@ class SQLiteAdapter {
         habit_id INTEGER NOT NULL,
         user_id INTEGER,
         date TEXT NOT NULL, -- YYYY-MM-DD
+        status TEXT DEFAULT 'completed',
         completed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (habit_id) REFERENCES habits (id),
         FOREIGN KEY (user_id) REFERENCES users (id)
       );
+
+      CREATE INDEX IF NOT EXISTS idx_habits_user_id ON habits(user_id);
+      CREATE INDEX IF NOT EXISTS idx_completions_user_id_date ON completions(user_id, date);
+      CREATE INDEX IF NOT EXISTS idx_completions_habit_id ON completions(habit_id);
     `);
 
     // Migrations
     try { this.db.exec(`ALTER TABLE habits ADD COLUMN user_id INTEGER;`); } catch (e) {}
     try { this.db.exec(`ALTER TABLE completions ADD COLUMN user_id INTEGER;`); } catch (e) {}
+    try { this.db.exec(`ALTER TABLE completions ADD COLUMN status TEXT DEFAULT 'completed';`); } catch (e) {}
     try { this.db.exec(`ALTER TABLE users ADD COLUMN password TEXT;`); } catch (e) {}
+    try { this.db.exec(`ALTER TABLE users ADD COLUMN recovery_code TEXT;`); } catch (e) {}
   }
 
   async query(text: string, params: any[] = []): Promise<QueryResult> {
@@ -79,20 +87,20 @@ class SQLiteAdapter {
   }
 }
 
-// --- Postgres Adapter (Vercel) ---
+// --- Postgres Adapter ---
 class PostgresAdapter {
-  private sql: any;
+  private pool: any;
 
   async init() {
     try {
-      console.log('PostgresAdapter: Importing @vercel/postgres...');
-      const { sql } = await import('@vercel/postgres');
-      this.sql = sql;
-      console.log('PostgresAdapter: @vercel/postgres imported.');
+      const { Pool } = await import('pg');
+      this.pool = new Pool({
+        connectionString: process.env.POSTGRES_URL,
+        ssl: process.env.POSTGRES_URL?.includes('localhost') ? false : { rejectUnauthorized: false }
+      });
 
       // Initialize Database Schema
-      console.log('PostgresAdapter: Initializing schema...');
-      await this.sql`
+      await this.pool.query(`
         CREATE TABLE IF NOT EXISTS users (
           id SERIAL PRIMARY KEY,
           google_id TEXT UNIQUE NOT NULL,
@@ -100,11 +108,12 @@ class PostgresAdapter {
           name TEXT,
           picture TEXT,
           password TEXT,
+          recovery_code TEXT,
           created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
-      `;
+      `);
       
-      await this.sql`
+      await this.pool.query(`
         CREATE TABLE IF NOT EXISTS habits (
           id SERIAL PRIMARY KEY,
           user_id INTEGER,
@@ -114,20 +123,31 @@ class PostgresAdapter {
           archived INTEGER DEFAULT 0,
           FOREIGN KEY (user_id) REFERENCES users (id)
         );
-      `;
+      `);
 
-      await this.sql`
+      await this.pool.query(`
         CREATE TABLE IF NOT EXISTS completions (
           id SERIAL PRIMARY KEY,
           habit_id INTEGER NOT NULL,
           user_id INTEGER,
           date TEXT NOT NULL,
+          status TEXT DEFAULT 'completed',
           completed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
           FOREIGN KEY (habit_id) REFERENCES habits (id),
           FOREIGN KEY (user_id) REFERENCES users (id)
         );
-      `;
-      console.log('PostgresAdapter: Schema initialized.');
+      `);
+
+      await this.pool.query(`CREATE INDEX IF NOT EXISTS idx_habits_user_id ON habits(user_id);`);
+      await this.pool.query(`CREATE INDEX IF NOT EXISTS idx_completions_user_id_date ON completions(user_id, date);`);
+      await this.pool.query(`CREATE INDEX IF NOT EXISTS idx_completions_habit_id ON completions(habit_id);`);
+
+      // Migrations
+      try { await this.pool.query(`ALTER TABLE habits ADD COLUMN user_id INTEGER;`); } catch (e) {}
+      try { await this.pool.query(`ALTER TABLE completions ADD COLUMN user_id INTEGER;`); } catch (e) {}
+      try { await this.pool.query(`ALTER TABLE completions ADD COLUMN status TEXT DEFAULT 'completed';`); } catch (e) {}
+      try { await this.pool.query(`ALTER TABLE users ADD COLUMN password TEXT;`); } catch (e) {}
+      try { await this.pool.query(`ALTER TABLE users ADD COLUMN recovery_code TEXT;`); } catch (e) {}
     } catch (error) {
       console.error('PostgresAdapter: Initialization failed:', error);
       throw error;
@@ -136,7 +156,7 @@ class PostgresAdapter {
 
   async query(text: string, params: any[] = []): Promise<QueryResult> {
     try {
-      const result = await this.sql.query(text, params);
+      const result = await this.pool.query(text, params);
       
       let lastInsertRowid: number | undefined;
       if (result.rows.length > 0 && (text.toUpperCase().includes('INSERT') || text.toUpperCase().includes('RETURNING'))) {
@@ -159,26 +179,23 @@ class PostgresAdapter {
 let dbInstance: SQLiteAdapter | PostgresAdapter;
 
 export const getDb = async () => {
-  console.log('getDb: Called');
   if (dbInstance) {
-    console.log('getDb: Returning existing instance');
     return dbInstance;
   }
 
   if (process.env.POSTGRES_URL) {
-    console.log('Using Vercel Postgres');
     dbInstance = new PostgresAdapter();
     await (dbInstance as PostgresAdapter).init();
   } else {
-    console.log('Using Local SQLite');
+    if (process.env.VERCEL) {
+      console.error('CRITICAL ERROR: Running on Vercel but POSTGRES_URL is not set.');
+      console.error('Please go to your Vercel Dashboard -> Storage -> Create Database -> Postgres.');
+      throw new Error('Database configuration missing. POSTGRES_URL is required in production.');
+    }
     try {
-      console.log('Importing better-sqlite3...');
       const { default: Database } = await import('better-sqlite3');
-      console.log('better-sqlite3 imported. Connecting to habits.db...');
       const db = new Database('habits.db');
-      console.log('Connected to habits.db. Initializing adapter...');
       dbInstance = new SQLiteAdapter(db);
-      console.log('SQLite adapter initialized.');
     } catch (error) {
       console.error('Failed to initialize SQLite:', error);
       throw error;

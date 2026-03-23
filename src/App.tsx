@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, type FC, useRef, type ChangeEvent } from 'react';
+import React, { useState, useEffect, useMemo, type FC, useRef, type ChangeEvent, createContext, useContext } from 'react';
 import { motion, AnimatePresence, useScroll, useTransform, PanInfo, useMotionValue } from 'motion/react';
 import { format, subDays, eachDayOfInterval, startOfYear, endOfYear, parseISO, getDay, startOfWeek, endOfWeek, startOfMonth, endOfMonth, isSameDay, isSameMonth, addMonths, subMonths, isValid } from 'date-fns';
 import { Plus, Check, Trash2, Archive, BarChart2, Calendar, Settings as SettingsIcon, X, ChevronRight, ChevronLeft, Upload, Download, FileText } from 'lucide-react';
@@ -6,17 +6,54 @@ import { cn } from './lib/utils';
 import { Habit, StatData } from './types';
 import { parse } from 'papaparse';
 
-// --- Components ---
+// --- Palettes ---
+export type Palette = {
+  name: string;
+  colors: string[];
+};
+
+export const PALETTES: Record<string, Palette> = {
+  traffic: {
+    name: 'Traffic Light',
+    colors: ['bg-[#E8E8E3]', 'bg-bold-red', 'bg-signal-yellow', 'bg-green-400', 'bg-racing-green']
+  },
+  original: {
+    name: 'Original',
+    colors: ['bg-[#E8E8E3]', 'bg-bold-red', 'bg-signal-yellow', 'bg-electric-blue', 'bg-racing-green']
+  },
+  ocean: {
+    name: 'Ocean',
+    colors: ['bg-[#E8E8E3]', 'bg-blue-300', 'bg-blue-500', 'bg-blue-700', 'bg-blue-900']
+  },
+  monochrome: {
+    name: 'Monochrome',
+    colors: ['bg-[#E8E8E3]', 'bg-gray-300', 'bg-gray-500', 'bg-gray-700', 'bg-black']
+  },
+  sunset: {
+    name: 'Sunset',
+    colors: ['bg-[#E8E8E3]', 'bg-yellow-300', 'bg-orange-400', 'bg-red-500', 'bg-purple-800']
+  }
+};
+
+export const PaletteContext = createContext<{
+  paletteId: string;
+  setPaletteId: (id: string) => void;
+}>({ paletteId: 'traffic', setPaletteId: () => {} });
 
 // --- Helpers ---
 
-const getApiUrl = (path: string) => {
-  // @ts-ignore - Vite env variables
-  const baseUrl = import.meta.env.VITE_APP_URL;
-  if (baseUrl && baseUrl !== 'null' && baseUrl !== '') {
-    return `${baseUrl}${path}`;
+const apiFetch = async (path: string, options: RequestInit = {}) => {
+  const headers = new Headers(options.headers);
+  const token = localStorage.getItem('auth_token');
+  if (token) {
+    headers.set('Authorization', `Bearer ${token}`);
   }
-  return path;
+  
+  return fetch(path, {
+    ...options,
+    headers,
+    credentials: 'include'
+  });
 };
 
 const GLASS_COLORS = ['glass-blue', 'glass-yellow', 'glass-green', 'glass-brown'];
@@ -27,36 +64,64 @@ const getGlassClass = (index: number) => GLASS_COLORS[index % GLASS_COLORS.lengt
 
 const LoginScreen = ({ onLogin }: { onLogin: () => void }) => {
   const [isRegistering, setIsRegistering] = useState(false);
+  const [isForgotPassword, setIsForgotPassword] = useState(false);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [recoveryCode, setRecoveryCode] = useState('');
+  const [newRecoveryCode, setNewRecoveryCode] = useState('');
   const [error, setError] = useState('');
+  const [successMsg, setSuccessMsg] = useState('');
   const [loading, setLoading] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
+    setSuccessMsg('');
     setLoading(true);
 
     try {
-      const endpoint = isRegistering ? '/api/auth/register' : '/api/auth/login';
-      console.log(`Submitting form. Mode: ${isRegistering ? 'Register' : 'Login'}, Endpoint: ${endpoint}`);
-      
-      const url = getApiUrl(endpoint);
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password })
-      });
-      const data = await res.json();
-      
-      if (!res.ok) {
-        console.error('Auth failed:', data);
-        setError(data.error || 'Authentication failed');
-        return;
-      }
+      if (isForgotPassword) {
+        const res = await apiFetch('/api/auth/reset-password', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email, newPassword: password, recoveryCode })
+        });
+        const data = await res.json();
+        
+        if (!res.ok) {
+          setError(data.error || 'Password reset failed');
+          return;
+        }
+        
+        setSuccessMsg('Password reset successfully! You can now log in.');
+        setIsForgotPassword(false);
+        setPassword('');
+        setRecoveryCode('');
+      } else {
+        const endpoint = isRegistering ? '/api/auth/register' : '/api/auth/login';
+        
+        const res = await apiFetch(endpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email, password })
+        });
+        const data = await res.json();
+        
+        if (!res.ok) {
+          setError(data.error || 'Authentication failed');
+          return;
+        }
 
-      console.log('Auth successful');
-      onLogin();
+        if (data.token) {
+          localStorage.setItem('auth_token', data.token);
+        }
+
+        if (isRegistering && data.user?.recoveryCode) {
+          setNewRecoveryCode(data.user.recoveryCode);
+        } else {
+          onLogin();
+        }
+      }
     } catch (e) {
       console.error('Auth error:', e);
       setError('An error occurred. Please try again.');
@@ -65,6 +130,30 @@ const LoginScreen = ({ onLogin }: { onLogin: () => void }) => {
     }
   };
 
+  if (newRecoveryCode) {
+    return (
+      <div className="min-h-screen bg-[#F5F5F0] flex flex-col items-center justify-center p-6">
+        <div className="w-full max-w-md bg-white border-3 border-black p-10 shadow-[8px_8px_0px_#000000] rounded-none text-center">
+          <h2 className="text-2xl font-display uppercase tracking-widest mb-6 border-b-2 border-black pb-2">
+            Save Your Recovery Code
+          </h2>
+          <p className="text-black/70 mb-6 font-serif italic">
+            Please save this code in a secure place. You will need it if you ever forget your password.
+          </p>
+          <div className="bg-[#F5F5F0] border-3 border-black p-6 mb-8">
+            <span className="text-3xl font-mono font-bold tracking-widest">{newRecoveryCode}</span>
+          </div>
+          <button
+            onClick={onLogin}
+            className="w-full py-5 bg-black text-white font-display text-sm uppercase tracking-widest hover:bg-electric-blue transition-colors rounded-none shadow-[4px_4px_0px_#000000] active:translate-y-1 active:translate-x-1 active:shadow-[0px_0px_0px_#000000]"
+          >
+            I have saved it
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-[#F5F5F0] flex flex-col items-center justify-center p-6">
       <div className="w-full max-w-md bg-white border-3 border-black p-10 shadow-[8px_8px_0px_#000000] rounded-none text-center">
@@ -72,13 +161,18 @@ const LoginScreen = ({ onLogin }: { onLogin: () => void }) => {
         <p className="text-xl font-serif italic text-black/70 mb-10">Track your habits with brutalist elegance.</p>
         
         <h2 className="text-2xl font-display uppercase tracking-widest mb-6 border-b-2 border-black pb-2">
-          {isRegistering ? 'Create Account' : 'Login'}
+          {isForgotPassword ? 'Reset Password' : (isRegistering ? 'Create Account' : 'Login')}
         </h2>
 
         <form onSubmit={handleSubmit} className="space-y-6">
           {error && (
             <div className="p-3 border-3 border-bold-red bg-bold-red/10 text-bold-red font-display text-xs uppercase tracking-widest">
               {error}
+            </div>
+          )}
+          {successMsg && (
+            <div className="p-3 border-3 border-black bg-green-100 text-black font-display text-xs uppercase tracking-widest">
+              {successMsg}
             </div>
           )}
           
@@ -91,11 +185,22 @@ const LoginScreen = ({ onLogin }: { onLogin: () => void }) => {
             className="w-full bg-transparent border-b-3 border-black text-black text-xl font-display py-3 focus:outline-none focus:border-electric-blue transition-colors placeholder-black/30"
           />
           
+          {isForgotPassword && (
+            <input
+              type="text"
+              value={recoveryCode}
+              onChange={(e) => setRecoveryCode(e.target.value)}
+              placeholder="RECOVERY CODE"
+              required
+              className="w-full bg-transparent border-b-3 border-black text-black text-xl font-display py-3 focus:outline-none focus:border-electric-blue transition-colors placeholder-black/30"
+            />
+          )}
+
           <input
             type="password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
-            placeholder="PASSWORD"
+            placeholder={isForgotPassword ? "NEW PASSWORD" : "PASSWORD"}
             required
             className="w-full bg-transparent border-b-3 border-black text-black text-xl font-display py-3 focus:outline-none focus:border-electric-blue transition-colors placeholder-black/30"
           />
@@ -105,20 +210,41 @@ const LoginScreen = ({ onLogin }: { onLogin: () => void }) => {
             disabled={loading}
             className="w-full py-5 bg-black text-white font-display text-sm uppercase tracking-widest hover:bg-electric-blue transition-colors rounded-none shadow-[4px_4px_0px_#000000] active:translate-y-1 active:translate-x-1 active:shadow-[0px_0px_0px_#000000] disabled:opacity-50"
           >
-            {loading ? 'Processing...' : (isRegistering ? 'Create Account' : 'Log In')}
+            {loading ? 'Processing...' : (isForgotPassword ? 'Reset Password' : (isRegistering ? 'Create Account' : 'Log In'))}
           </button>
         </form>
 
-        <button
-          type="button"
-          onClick={() => {
-            setIsRegistering(!isRegistering);
-            setError('');
-          }}
-          className="mt-8 text-black/60 hover:text-black font-display text-xs uppercase tracking-widest underline decoration-2 underline-offset-4 transition-colors"
-        >
-          {isRegistering ? 'Already have an account? Log In' : 'Need an account? Sign Up'}
-        </button>
+        <div className="mt-8 flex flex-col gap-4">
+          {!isForgotPassword && !isRegistering && (
+            <button
+              type="button"
+              onClick={() => {
+                setIsForgotPassword(true);
+                setError('');
+                setSuccessMsg('');
+              }}
+              className="text-black/60 hover:text-black font-display text-xs uppercase tracking-widest underline decoration-2 underline-offset-4 transition-colors"
+            >
+              Forgot Password?
+            </button>
+          )}
+          
+          <button
+            type="button"
+            onClick={() => {
+              if (isForgotPassword) {
+                setIsForgotPassword(false);
+              } else {
+                setIsRegistering(!isRegistering);
+              }
+              setError('');
+              setSuccessMsg('');
+            }}
+            className="text-black/60 hover:text-black font-display text-xs uppercase tracking-widest underline decoration-2 underline-offset-4 transition-colors"
+          >
+            {isForgotPassword ? 'Back to Login' : (isRegistering ? 'Already have an account? Log In' : 'Need an account? Sign Up')}
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -208,7 +334,7 @@ const HabitItem: FC<HabitItemProps> = ({ habit, onToggle, onDelete, onEdit }) =>
           style={{ opacity: deleteOpacity }}
           className="font-display text-sm text-white uppercase tracking-widest"
         >
-          Delete
+          Archive
         </motion.span>
       </div>
 
@@ -221,7 +347,7 @@ const HabitItem: FC<HabitItemProps> = ({ habit, onToggle, onDelete, onEdit }) =>
         style={{ x }}
         className={cn(
           "habit-item p-6 flex items-center justify-between cursor-pointer rounded-none relative z-10",
-          habit.completed ? cn("is-active", colorClass) : "bg-white"
+          habit.completed ? cn("is-active", colorClass) : habit.status === 'skipped' ? "bg-gray-200" : "bg-white"
         )}
         onClick={() => {
           onToggle(habit.id);
@@ -237,16 +363,20 @@ const HabitItem: FC<HabitItemProps> = ({ habit, onToggle, onDelete, onEdit }) =>
         <div className="flex items-center justify-between w-full relative z-10">
           <span className={cn(
             "text-3xl font-serif italic transition-colors duration-300",
-            habit.completed && colorClass !== 'bg-signal-yellow' ? "text-white" : "text-black"
+            habit.completed && colorClass !== 'bg-signal-yellow' ? "text-white" : habit.status === 'skipped' ? "text-gray-500 line-through" : "text-black"
           )}>
             {habit.title}
           </span>
 
           <div className={cn(
             "habit-checkbox w-8 h-8 flex items-center justify-center transition-colors duration-300",
-            habit.completed ? "border-black" : "border-black"
+            habit.completed ? "border-black" : habit.status === 'skipped' ? "border-gray-400" : "border-black"
           )}>
-            <Check className={cn("w-6 h-6 transition-opacity duration-300 check-icon", habit.completed ? "opacity-100" : "opacity-0")} strokeWidth={4} />
+            {habit.status === 'skipped' ? (
+              <X className="w-6 h-6 text-gray-500" strokeWidth={4} />
+            ) : (
+              <Check className={cn("w-6 h-6 transition-opacity duration-300 check-icon", habit.completed ? "opacity-100" : "opacity-0")} strokeWidth={4} />
+            )}
           </div>
         </div>
       </motion.div>
@@ -254,7 +384,7 @@ const HabitItem: FC<HabitItemProps> = ({ habit, onToggle, onDelete, onEdit }) =>
   );
 };
 
-const AddHabitModal = ({ isOpen, onClose, onSave, initialHabit }: { isOpen: boolean; onClose: () => void; onSave: (title: string) => void; initialHabit?: Habit | null }) => {
+const AddHabitModal = ({ isOpen, onClose, onSave, onDelete, onSkip, initialHabit }: { isOpen: boolean; onClose: () => void; onSave: (title: string) => void; onDelete?: (id: number) => void; onSkip?: (id: number) => void; initialHabit?: Habit | null }) => {
   const [title, setTitle] = useState(initialHabit?.title || '');
 
   useEffect(() => {
@@ -285,18 +415,44 @@ const AddHabitModal = ({ isOpen, onClose, onSave, initialHabit }: { isOpen: bool
           className="w-full bg-transparent border-b-3 border-black text-black text-3xl font-serif italic py-3 focus:outline-none focus:border-electric-blue transition-colors placeholder-black/30 mb-10"
         />
 
-        <button
-          onClick={() => {
-            if (title.trim()) {
-              onSave(title);
-              setTitle('');
-              onClose();
-            }
-          }}
-          className="w-full py-5 bg-black text-white font-display text-sm uppercase tracking-widest hover:bg-electric-blue transition-colors rounded-none shadow-[4px_4px_0px_#000000] active:translate-y-1 active:translate-x-1 active:shadow-[0px_0px_0px_#000000]"
-        >
-          {initialHabit ? 'Update' : 'Create'}
-        </button>
+        <div className="flex flex-col gap-3">
+          <button
+            onClick={() => {
+              if (title.trim()) {
+                onSave(title);
+                setTitle('');
+                onClose();
+              }
+            }}
+            className="w-full py-5 bg-black text-white font-display text-sm uppercase tracking-widest hover:bg-electric-blue transition-colors rounded-none shadow-[4px_4px_0px_#000000] active:translate-y-1 active:translate-x-1 active:shadow-[0px_0px_0px_#000000]"
+          >
+            {initialHabit ? 'Update' : 'Create'}
+          </button>
+
+          {initialHabit && onSkip && (
+            <button
+              onClick={() => {
+                onSkip(initialHabit.id);
+                onClose();
+              }}
+              className="w-full py-5 bg-[#F5F5F0] text-black border-3 border-black font-display text-sm uppercase tracking-widest hover:bg-black hover:text-white transition-colors rounded-none shadow-[4px_4px_0px_#000000] active:translate-y-1 active:translate-x-1 active:shadow-[0px_0px_0px_#000000]"
+            >
+              {initialHabit.status === 'skipped' ? 'Unskip for Today' : 'Skip for Today'}
+            </button>
+          )}
+
+          {initialHabit && onDelete && (
+            <button
+              onClick={() => {
+                onDelete(initialHabit.id);
+                onClose();
+              }}
+              className="w-full py-5 bg-bold-red text-white border-3 border-black font-display text-sm uppercase tracking-widest hover:bg-black transition-colors rounded-none shadow-[4px_4px_0px_#000000] active:translate-y-1 active:translate-x-1 active:shadow-[0px_0px_0px_#000000]"
+            >
+              Archive Habit
+            </button>
+          )}
+        </div>
       </motion.div>
     </div>
   );
@@ -305,23 +461,35 @@ const AddHabitModal = ({ isOpen, onClose, onSave, initialHabit }: { isOpen: bool
 // --- Visualization Components ---
 
 const WeeklyView = ({ data }: { data: StatData }) => {
+  const { paletteId } = useContext(PaletteContext);
+  const palette = PALETTES[paletteId]?.colors || PALETTES['traffic'].colors;
+
   const today = new Date();
   const start = startOfWeek(today, { weekStartsOn: 1 }); // Monday start
   const end = endOfWeek(today, { weekStartsOn: 1 });
   const days = eachDayOfInterval({ start, end });
 
-  const maxHabits = data.totalHabits || 1;
+  const getColorClass = (percentage: number) => {
+    if (percentage === 0) return palette[0];
+    if (percentage <= 0.33) return palette[1];
+    if (percentage <= 0.66) return palette[2];
+    if (percentage < 1) return palette[3];
+    return palette[4];
+  };
 
   return (
     <div className="w-full h-64 flex items-end justify-between gap-3 pt-8">
       {days.map((day, index) => {
         const dateStr = format(day, 'yyyy-MM-dd');
+        const monthStr = dateStr.substring(0, 7);
+        const activeThisMonth = data.activeHabitsPerMonth?.find(m => m.month === monthStr)?.count;
+        const maxHabits = activeThisMonth || data.totalHabits || 1;
+
         const dayData = data.heatmap.find(d => d.date === dateStr);
         const count = dayData ? dayData.count : 0;
         const height = Math.max((count / maxHabits) * 100, 5); // Min 5% height
-
-        const primaryColors = ['bg-electric-blue', 'bg-signal-yellow', 'bg-bold-red', 'bg-racing-green'];
-        const colorClass = primaryColors[index % primaryColors.length];
+        const percentage = count / maxHabits;
+        const colorClass = getColorClass(percentage);
 
         return (
           <div key={dateStr} className="flex flex-col items-center gap-4 flex-1">
@@ -348,6 +516,8 @@ const WeeklyView = ({ data }: { data: StatData }) => {
 };
 
 const MonthlyView = ({ data }: { data: StatData }) => {
+  const { paletteId } = useContext(PaletteContext);
+  const palette = PALETTES[paletteId]?.colors || PALETTES['traffic'].colors;
   const [currentMonth, setCurrentMonth] = useState(new Date());
 
   const days = eachDayOfInterval({
@@ -359,11 +529,11 @@ const MonthlyView = ({ data }: { data: StatData }) => {
   const prevMonth = () => setCurrentMonth(subMonths(currentMonth, 1));
 
   const getColorClass = (percentage: number) => {
-    if (percentage === 0) return 'bg-[#E8E8E3]';
-    if (percentage <= 0.33) return 'bg-bold-red';
-    if (percentage <= 0.66) return 'bg-signal-yellow';
-    if (percentage < 1) return 'bg-electric-blue';
-    return 'bg-racing-green';
+    if (percentage === 0) return palette[0];
+    if (percentage <= 0.33) return palette[1];
+    if (percentage <= 0.66) return palette[2];
+    if (percentage < 1) return palette[3];
+    return palette[4];
   };
 
   return (
@@ -383,9 +553,12 @@ const MonthlyView = ({ data }: { data: StatData }) => {
       <div className="grid grid-cols-7 gap-2">
         {days.map((day, index) => {
           const dateStr = format(day, 'yyyy-MM-dd');
+          const monthStr = dateStr.substring(0, 7);
+          const activeThisMonth = data.activeHabitsPerMonth?.find(m => m.month === monthStr)?.count;
+          const total = activeThisMonth || data.totalHabits || 1;
+
           const dayData = data.heatmap.find(d => d.date === dateStr);
           const count = dayData ? dayData.count : 0;
-          const total = data.totalHabits || 1;
           const percentage = count / total;
           
           const isCurrentMonth = isSameMonth(day, currentMonth);
@@ -417,23 +590,26 @@ const MonthlyView = ({ data }: { data: StatData }) => {
 };
 
 const YearlyView = ({ data }: { data: StatData }) => {
-  // Generate full year 2026
-  const start = startOfYear(new Date(2026, 0, 1));
-  const end = endOfYear(new Date(2026, 0, 1));
+  const { paletteId } = useContext(PaletteContext);
+  const palette = PALETTES[paletteId]?.colors || PALETTES['traffic'].colors;
+
+  // Generate full current year
+  const currentYear = new Date().getFullYear();
+  const start = startOfYear(new Date(currentYear, 0, 1));
+  const end = endOfYear(new Date(currentYear, 0, 1));
   const days = eachDayOfInterval({ start, end });
 
   // Calculate padding days for the start of the year to align Mon-Sun grid
-  // Jan 1 2026 is Thursday.
   // Mon=0, Tue=1, Wed=2, Thu=3...
   const startDay = (getDay(start) + 6) % 7; // Convert Sun=0 to Mon=0 scale
   const paddingDays = Array.from({ length: startDay });
 
   const getColorClass = (percentage: number) => {
-    if (percentage === 0) return 'bg-[#E8E8E3]';
-    if (percentage <= 0.33) return 'bg-bold-red';
-    if (percentage <= 0.66) return 'bg-signal-yellow';
-    if (percentage < 1) return 'bg-electric-blue';
-    return 'bg-racing-green';
+    if (percentage === 0) return palette[0];
+    if (percentage <= 0.33) return palette[1];
+    if (percentage <= 0.66) return palette[2];
+    if (percentage < 1) return palette[3];
+    return palette[4];
   };
 
   return (
@@ -447,9 +623,13 @@ const YearlyView = ({ data }: { data: StatData }) => {
 
            {days.map((day) => {
              const dateStr = format(day, 'yyyy-MM-dd');
+             const monthStr = dateStr.substring(0, 7);
+             const activeThisMonth = data.activeHabitsPerMonth?.find(m => m.month === monthStr)?.count;
+             const total = activeThisMonth || data.totalHabits || 1;
+
              const dayData = data.heatmap.find(d => d.date === dateStr);
              const count = dayData ? dayData.count : 0;
-             const percentage = count / (data.totalHabits || 1);
+             const percentage = count / total;
              const colorClass = getColorClass(percentage);
              
              return (
@@ -531,8 +711,7 @@ const TrendsScreen = () => {
   const [view, setView] = useState<'weekly' | 'monthly' | 'yearly'>('weekly');
 
   useEffect(() => {
-    const url = getApiUrl('/api/stats');
-    fetch(url)
+    apiFetch('/api/stats')
       .then(res => {
         if (!res.ok) throw new Error('Failed to fetch stats');
         return res.json();
@@ -589,15 +768,13 @@ const TrendsScreen = () => {
           <div className="border-3 border-black bg-white p-6 rounded-none shadow-[4px_4px_0px_#000000]">
             <div className="text-black/50 font-display text-[10px] uppercase mb-3 tracking-widest">Current Streak</div>
             <div className="text-5xl font-serif italic text-black">
-              {/* Mock data for MVP */}
-              12
+              {stats?.currentStreak ?? 0}
             </div>
           </div>
           <div className="border-3 border-black bg-white p-6 rounded-none shadow-[4px_4px_0px_#000000]">
             <div className="text-black/50 font-display text-[10px] uppercase mb-3 tracking-widest">Completion Rate</div>
             <div className="text-5xl font-serif italic text-black">
-               {/* Mock data */}
-               87%
+               {stats?.completionRate ?? 0}%
             </div>
           </div>
         </div>
@@ -606,11 +783,72 @@ const TrendsScreen = () => {
   );
 };
 
-const SettingsScreen = () => {
+const ConfirmModal = ({ isOpen, message, onConfirm, onCancel }: { isOpen: boolean; message: string; onConfirm: () => void; onCancel: () => void }) => {
+  if (!isOpen) return null;
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-[#F5F5F0]/90 backdrop-blur-sm p-6">
+      <motion.div 
+        initial={{ scale: 0.9, opacity: 0 }}
+        animate={{ scale: 1, opacity: 1 }}
+        exit={{ scale: 0.9, opacity: 0 }}
+        className="w-full max-w-sm bg-white border-3 border-black p-8 shadow-[8px_8px_0px_#000000] rounded-none text-center"
+      >
+        <p className="text-black font-serif italic text-lg mb-8">{message}</p>
+        <div className="flex gap-4">
+          <button 
+            onClick={onCancel}
+            className="flex-1 py-3 border-3 border-black bg-white text-black font-display text-xs uppercase tracking-widest hover:bg-gray-100 transition-colors rounded-none shadow-[4px_4px_0px_#000000] active:translate-y-1 active:translate-x-1 active:shadow-[0px_0px_0px_#000000]"
+          >
+            Cancel
+          </button>
+          <button 
+            onClick={onConfirm}
+            className="flex-1 py-3 border-3 border-black bg-bold-red text-white font-display text-xs uppercase tracking-widest hover:bg-black transition-colors rounded-none shadow-[4px_4px_0px_#000000] active:translate-y-1 active:translate-x-1 active:shadow-[0px_0px_0px_#000000]"
+          >
+            Confirm
+          </button>
+        </div>
+      </motion.div>
+    </div>
+  );
+};
+
+const SettingsScreen = ({ onHabitRestored }: { onHabitRestored: () => void }) => {
   const { scrollY } = useScroll();
+  const { paletteId, setPaletteId } = useContext(PaletteContext);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [importing, setImporting] = useState(false);
   const [importStatus, setImportStatus] = useState<{ type: 'success' | 'error', message: string } | null>(null);
+  const [archivedHabits, setArchivedHabits] = useState<Habit[]>([]);
+  const [confirmConfig, setConfirmConfig] = useState<{ isOpen: boolean; message: string; onConfirm: () => void } | null>(null);
+
+  const fetchArchivedHabits = async () => {
+    try {
+      const res = await apiFetch('/api/habits/archived');
+      if (res.ok) {
+        const data = await res.json();
+        setArchivedHabits(data);
+      }
+    } catch (e) {
+      console.error('Failed to fetch archived habits', e);
+    }
+  };
+
+  useEffect(() => {
+    fetchArchivedHabits();
+  }, []);
+
+  const handleRestore = async (id: number) => {
+    try {
+      const res = await apiFetch(`/api/habits/${id}/restore`, { method: 'POST' });
+      if (res.ok) {
+        setArchivedHabits(prev => prev.filter(h => h.id !== id));
+        onHabitRestored();
+      }
+    } catch (e) {
+      console.error('Failed to restore habit', e);
+    }
+  };
 
   const handleFileUpload = (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -665,7 +903,7 @@ const SettingsScreen = () => {
             throw new Error('No valid data found. CSV must have "Date" and "Habit Title" columns.');
           }
 
-          const res = await fetch('/api/import', {
+          const res = await apiFetch('/api/import', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ data: normalizedData })
@@ -711,8 +949,31 @@ const SettingsScreen = () => {
       <Header title="Settings" scrollY={scrollY} />
       
       <div className="px-6 mt-8">
+        <div className="mt-8 mb-12">
+          <h4 className="text-black font-display text-sm uppercase tracking-widest mb-6">Heatmap Palette</h4>
+          <div className="space-y-4">
+            {Object.entries(PALETTES).map(([id, palette]) => (
+              <button
+                key={id}
+                onClick={() => setPaletteId(id)}
+                className={cn(
+                  "w-full p-4 border-3 border-black bg-white flex items-center justify-between transition-colors shadow-[4px_4px_0px_#000000] active:translate-y-1 active:translate-x-1 active:shadow-[0px_0px_0px_#000000]",
+                  paletteId === id ? "bg-black text-white" : "hover:bg-gray-50 text-black"
+                )}
+              >
+                <span className="font-serif italic text-lg">{palette.name}</span>
+                <div className="flex gap-1">
+                  {palette.colors.slice(1).map((color, i) => (
+                    <div key={i} className={cn("w-6 h-6 border border-black/20", color)} />
+                  ))}
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
+
         <div className="border-t-3 border-black">
-          {['Appearance', 'Notifications', 'Data & Storage', 'About'].map((item) => (
+          {['Notifications', 'Data & Storage', 'About'].map((item) => (
             <button key={item} className="w-full py-6 flex justify-between items-center border-b-3 border-black group hover:bg-white transition-colors px-4">
               <span className="text-black text-xl font-serif italic">{item}</span>
               <ChevronRight className="w-6 h-6 text-black group-hover:translate-x-1 transition-transform" strokeWidth={3} />
@@ -720,12 +981,31 @@ const SettingsScreen = () => {
           ))}
         </div>
 
+        {archivedHabits.length > 0 && (
+          <div className="mt-12">
+            <h4 className="text-black font-display text-sm uppercase tracking-widest mb-6">Archived Habits</h4>
+            <div className="space-y-4">
+              {archivedHabits.map(habit => (
+                <div key={habit.id} className="w-full p-4 border-3 border-black bg-white flex items-center justify-between shadow-[4px_4px_0px_#000000]">
+                  <span className="font-serif italic text-lg">{habit.title}</span>
+                  <button 
+                    onClick={() => handleRestore(habit.id)}
+                    className="px-4 py-2 bg-black text-white font-display text-[10px] uppercase tracking-widest hover:bg-electric-blue transition-colors rounded-none"
+                  >
+                    Restore
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         <div className="mt-12">
           <h4 className="text-black font-display text-sm uppercase tracking-widest mb-6">Account</h4>
           <button 
             onClick={async () => {
-              const url = getApiUrl('/api/auth/logout');
-              await fetch(url, { method: 'POST' });
+              await apiFetch('/api/auth/logout', { method: 'POST' });
+              localStorage.removeItem('auth_token');
               window.location.reload();
             }}
             className="w-full py-4 border-3 border-black bg-white text-black font-display text-xs uppercase tracking-widest hover:bg-bold-red hover:text-white transition-colors rounded-none shadow-[4px_4px_0px_#000000] active:translate-y-1 active:translate-x-1 active:shadow-[0px_0px_0px_#000000]"
@@ -788,24 +1068,30 @@ const SettingsScreen = () => {
           <h4 className="text-black font-display text-sm uppercase tracking-widest mb-6">Data Management</h4>
           <div className="space-y-4">
             <button 
-              onClick={async () => {
-                if (confirm('This will delete all your data and replace it with sample data for 2026. Continue?')) {
-                  const url = getApiUrl('/api/seed');
-                  await fetch(url, { method: 'POST' });
-                  window.location.reload();
-                }
+              onClick={() => {
+                setConfirmConfig({
+                  isOpen: true,
+                  message: 'This will delete all your data and replace it with sample data for 2026. Continue?',
+                  onConfirm: async () => {
+                    await apiFetch('/api/seed', { method: 'POST' });
+                    window.location.reload();
+                  }
+                });
               }}
               className="w-full py-4 border-3 border-black bg-white text-black font-display text-xs uppercase tracking-widest hover:bg-signal-yellow transition-colors rounded-none shadow-[4px_4px_0px_#000000] active:translate-y-1 active:translate-x-1 active:shadow-[0px_0px_0px_#000000]"
             >
               Load Sample Data (2026)
             </button>
             <button 
-              onClick={async () => {
-                if (confirm('This will permanently delete all your data. Continue?')) {
-                  const url = getApiUrl('/api/reset');
-                  await fetch(url, { method: 'POST' });
-                  window.location.reload();
-                }
+              onClick={() => {
+                setConfirmConfig({
+                  isOpen: true,
+                  message: 'This will permanently delete all your data. Continue?',
+                  onConfirm: async () => {
+                    await apiFetch('/api/reset', { method: 'POST' });
+                    window.location.reload();
+                  }
+                });
               }}
               className="w-full py-4 border-3 border-black bg-black text-white font-display text-xs uppercase tracking-widest hover:bg-bold-red transition-colors rounded-none shadow-[4px_4px_0px_#000000] active:translate-y-1 active:translate-x-1 active:shadow-[0px_0px_0px_#000000]"
             >
@@ -818,6 +1104,20 @@ const SettingsScreen = () => {
           <p className="font-display text-xs text-black/40 uppercase tracking-widest">MonoHabit v1.1.0</p>
         </div>
       </div>
+
+      <AnimatePresence>
+        {confirmConfig?.isOpen && (
+          <ConfirmModal 
+            isOpen={confirmConfig.isOpen}
+            message={confirmConfig.message}
+            onConfirm={() => {
+              confirmConfig.onConfirm();
+              setConfirmConfig(null);
+            }}
+            onCancel={() => setConfirmConfig(null)}
+          />
+        )}
+      </AnimatePresence>
     </div>
   );
 };
@@ -832,11 +1132,15 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [user, setUser] = useState<any>(null);
   const [authLoading, setAuthLoading] = useState(true);
+  const [paletteId, setPaletteId] = useState(() => localStorage.getItem('monohabit_palette') || 'traffic');
+
+  useEffect(() => {
+    localStorage.setItem('monohabit_palette', paletteId);
+  }, [paletteId]);
 
   const fetchUser = async () => {
     try {
-      const url = getApiUrl('/api/auth/me');
-      const res = await fetch(url);
+      const res = await apiFetch('/api/auth/me');
       if (res.ok) {
         const data = await res.json();
         setUser(data);
@@ -868,8 +1172,7 @@ export default function App() {
 
   const fetchHabits = async () => {
     try {
-      const url = getApiUrl('/api/habits');
-      const res = await fetch(url);
+      const res = await apiFetch('/api/habits');
       if (!res.ok) throw new Error('Failed to fetch');
       const data = await res.json();
       if (Array.isArray(data)) {
@@ -894,28 +1197,57 @@ export default function App() {
 
   const handleToggle = async (id: number) => {
     // Optimistic update
-    setHabits(prev => prev.map(h => h.id === id ? { ...h, completed: !h.completed } : h));
+    setHabits(prev => prev.map(h => h.id === id ? { ...h, completed: !h.completed, status: h.completed ? null : 'completed' } : h));
     
-    const url = getApiUrl(`/api/habits/${id}/toggle`);
-    await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ date: format(new Date(), 'yyyy-MM-dd') })
-    });
-    // Re-fetch to ensure sync
-    fetchHabits();
-  };
-
-  const handleDelete = async (id: number) => {
-    if (confirm('Are you sure you want to archive this habit?')) {
-      const url = getApiUrl(`/api/habits/${id}`);
-      await fetch(url, { method: 'DELETE' });
+    try {
+      const res = await apiFetch(`/api/habits/${id}/toggle`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ date: format(new Date(), 'yyyy-MM-dd') })
+      });
+      if (!res.ok) throw new Error('Toggle failed');
+      const data = await res.json();
+      setHabits(prev => prev.map(h => h.id === id ? { ...h, completed: data.completed, status: data.status } : h));
+    } catch (e) {
+      console.error('Toggle error:', e);
+      // Revert optimistic update on failure
       fetchHabits();
     }
   };
 
+  const handleSkip = async (id: number) => {
+    // Optimistic update
+    setHabits(prev => prev.map(h => h.id === id ? { ...h, completed: false, status: h.status === 'skipped' ? null : 'skipped' } : h));
+    
+    try {
+      const res = await apiFetch(`/api/habits/${id}/skip`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ date: format(new Date(), 'yyyy-MM-dd') })
+      });
+      if (!res.ok) throw new Error('Skip failed');
+      const data = await res.json();
+      setHabits(prev => prev.map(h => h.id === id ? { ...h, completed: data.completed, status: data.status } : h));
+    } catch (e) {
+      console.error('Skip error:', e);
+      // Revert optimistic update on failure
+      fetchHabits();
+    }
+  };
+
+  const handleDelete = async (id: number) => {
+    // Optimistic update
+    setHabits(prev => prev.filter(h => h.id !== id));
+    try {
+      const res = await apiFetch(`/api/habits/${id}`, { method: 'DELETE' });
+      if (!res.ok) throw new Error('Delete failed');
+    } catch (e) {
+      console.error('Delete error:', e);
+      fetchHabits(); // Rollback on failure
+    }
+  };
+
   const handleSaveHabit = async (title: string) => {
-    console.log('handleSaveHabit called with title:', title);
     const tempId = Date.now();
     const newHabit: Habit = {
       id: tempId,
@@ -929,8 +1261,7 @@ export default function App() {
       // Optimistic update for edit
       setHabits(prev => prev.map(h => h.id === editingHabit.id ? { ...h, title } : h));
       try {
-        const url = getApiUrl(`/api/habits/${editingHabit.id}`);
-        const res = await fetch(url, {
+        const res = await apiFetch(`/api/habits/${editingHabit.id}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ title, frequency: editingHabit.frequency })
@@ -944,8 +1275,7 @@ export default function App() {
       // Optimistic update for add
       setHabits(prev => [newHabit, ...prev]);
       try {
-        const url = getApiUrl('/api/habits');
-        const res = await fetch(url, {
+        const res = await apiFetch('/api/habits', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ title, frequency: 'daily' })
@@ -984,46 +1314,50 @@ export default function App() {
   }
 
   return (
-    <div className="bg-[#F5F5F0] min-h-screen text-black font-sans selection:bg-black selection:text-[#F5F5F0]">
-      {loading && habits.length === 0 && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-[#F5F5F0]">
-          <motion.div 
-            animate={{ opacity: [0.4, 1, 0.4] }}
-            transition={{ repeat: Infinity, duration: 1.5 }}
-            className="font-display text-sm uppercase tracking-widest text-black"
-          >
-            Loading...
-          </motion.div>
-        </div>
-      )}
+    <PaletteContext.Provider value={{ paletteId, setPaletteId }}>
+      <div className="bg-[#F5F5F0] min-h-screen text-black font-sans selection:bg-black selection:text-[#F5F5F0]">
+        {loading && habits.length === 0 && (
+          <div className="fixed inset-0 z-[60] flex items-center justify-center bg-[#F5F5F0]">
+            <motion.div 
+              animate={{ opacity: [0.4, 1, 0.4] }}
+              transition={{ repeat: Infinity, duration: 1.5 }}
+              className="font-display text-sm uppercase tracking-widest text-black"
+            >
+              Loading...
+            </motion.div>
+          </div>
+        )}
 
-      {activeTab === 'today' && (
-        <TodayScreen 
-          habits={habits} 
-          onToggle={handleToggle} 
-          onDelete={handleDelete}
-          onEdit={openEditModal}
-          onAdd={() => {
-            setEditingHabit(null);
-            setIsModalOpen(true);
-          }}
-        />
-      )}
-      {activeTab === 'trends' && <TrendsScreen />}
-      {activeTab === 'settings' && <SettingsScreen />}
-
-      <TabBar activeTab={activeTab} onTabChange={setActiveTab} />
-
-      <AnimatePresence>
-        {isModalOpen && (
-          <AddHabitModal 
-            isOpen={isModalOpen} 
-            onClose={() => setIsModalOpen(false)} 
-            onSave={handleSaveHabit}
-            initialHabit={editingHabit}
+        {activeTab === 'today' && (
+          <TodayScreen 
+            habits={habits} 
+            onToggle={handleToggle} 
+            onDelete={handleDelete}
+            onEdit={openEditModal}
+            onAdd={() => {
+              setEditingHabit(null);
+              setIsModalOpen(true);
+            }}
           />
         )}
-      </AnimatePresence>
-    </div>
+        {activeTab === 'trends' && <TrendsScreen />}
+        {activeTab === 'settings' && <SettingsScreen onHabitRestored={fetchHabits} />}
+
+        <TabBar activeTab={activeTab} onTabChange={setActiveTab} />
+
+        <AnimatePresence>
+          {isModalOpen && (
+            <AddHabitModal 
+              isOpen={isModalOpen} 
+              onClose={() => setIsModalOpen(false)} 
+              onSave={handleSaveHabit}
+              onDelete={handleDelete}
+              onSkip={handleSkip}
+              initialHabit={editingHabit}
+            />
+          )}
+        </AnimatePresence>
+      </div>
+    </PaletteContext.Provider>
   );
 }

@@ -1,13 +1,11 @@
-import { createApp } from '../src/app';
+import { createApp } from '../src/app.ts';
 
 let app: any;
 
 export default async function handler(req: any, res: any) {
   try {
     if (!app) {
-      console.log('Vercel Handler: Initializing app...');
       app = await createApp();
-      console.log('Vercel Handler: App initialized.');
     }
     return app(req, res);
   } catch (error: any) {

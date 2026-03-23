@@ -8,7 +8,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 async function startServer() {
   try {
     const app = await createApp();
-    const PORT = 3000;
+    const PORT = 3001;
 
     // Vite middleware
     if (process.env.NODE_ENV !== 'production') {
