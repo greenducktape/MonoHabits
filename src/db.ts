@@ -49,9 +49,33 @@ class SQLiteAdapter {
         FOREIGN KEY (user_id) REFERENCES users (id)
       );
 
+      CREATE TABLE IF NOT EXISTS milestones (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        title TEXT NOT NULL,
+        status TEXT DEFAULT 'locked', -- locked, active, completed
+        x REAL NOT NULL,
+        y REAL NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users (id)
+      );
+
+      CREATE TABLE IF NOT EXISTS milestone_edges (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        from_id INTEGER NOT NULL,
+        to_id INTEGER NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users (id),
+        FOREIGN KEY (from_id) REFERENCES milestones (id) ON DELETE CASCADE,
+        FOREIGN KEY (to_id) REFERENCES milestones (id) ON DELETE CASCADE
+      );
+
       CREATE INDEX IF NOT EXISTS idx_habits_user_id ON habits(user_id);
       CREATE INDEX IF NOT EXISTS idx_completions_user_id_date ON completions(user_id, date);
       CREATE INDEX IF NOT EXISTS idx_completions_habit_id ON completions(habit_id);
+      CREATE INDEX IF NOT EXISTS idx_milestones_user_id ON milestones(user_id);
+      CREATE INDEX IF NOT EXISTS idx_milestone_edges_user_id ON milestone_edges(user_id);
     `);
 
     // Migrations
@@ -138,9 +162,37 @@ class PostgresAdapter {
         );
       `);
 
+      await this.pool.query(`
+        CREATE TABLE IF NOT EXISTS milestones (
+          id SERIAL PRIMARY KEY,
+          user_id INTEGER NOT NULL,
+          title TEXT NOT NULL,
+          status TEXT DEFAULT 'locked',
+          x REAL NOT NULL,
+          y REAL NOT NULL,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (user_id) REFERENCES users (id)
+        );
+      `);
+
+      await this.pool.query(`
+        CREATE TABLE IF NOT EXISTS milestone_edges (
+          id SERIAL PRIMARY KEY,
+          user_id INTEGER NOT NULL,
+          from_id INTEGER NOT NULL,
+          to_id INTEGER NOT NULL,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (user_id) REFERENCES users (id),
+          FOREIGN KEY (from_id) REFERENCES milestones (id) ON DELETE CASCADE,
+          FOREIGN KEY (to_id) REFERENCES milestones (id) ON DELETE CASCADE
+        );
+      `);
+
       await this.pool.query(`CREATE INDEX IF NOT EXISTS idx_habits_user_id ON habits(user_id);`);
       await this.pool.query(`CREATE INDEX IF NOT EXISTS idx_completions_user_id_date ON completions(user_id, date);`);
       await this.pool.query(`CREATE INDEX IF NOT EXISTS idx_completions_habit_id ON completions(habit_id);`);
+      await this.pool.query(`CREATE INDEX IF NOT EXISTS idx_milestones_user_id ON milestones(user_id);`);
+      await this.pool.query(`CREATE INDEX IF NOT EXISTS idx_milestone_edges_user_id ON milestone_edges(user_id);`);
 
       // Migrations
       try { await this.pool.query(`ALTER TABLE habits ADD COLUMN user_id INTEGER;`); } catch (e) {}

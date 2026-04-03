@@ -60,8 +60,264 @@ const GLASS_COLORS = ['glass-blue', 'glass-yellow', 'glass-green', 'glass-brown'
 
 const getGlassClass = (index: number) => GLASS_COLORS[index % GLASS_COLORS.length];
 
-// --- Components ---
+export type Milestone = {
+  id: number;
+  title: string;
+  status: 'locked' | 'active' | 'completed';
+  x: number;
+  y: number;
+};
 
+export type MilestoneEdge = {
+  id: number;
+  from_id: number;
+  to_id: number;
+};
+
+const WallScreen = () => {
+  const [nodes, setNodes] = useState<Milestone[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [selectedNodeId, setSelectedNodeId] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [promptConfig, setPromptConfig] = useState<{ isOpen: boolean; title: string; initialValue: string; onConfirm: (val: string) => void } | null>(null);
+
+  const fetchWallData = async () => {
+    try {
+      const res = await apiFetch('/api/milestones');
+      if (res.ok) {
+        const data = await res.json();
+        // Sort nodes by ID so they stack in order of creation
+        setNodes(data.nodes.sort((a: Milestone, b: Milestone) => a.id - b.id));
+      } else {
+        setError('Failed to fetch wall data');
+      }
+    } catch (e) {
+      console.error('Failed to fetch wall data', e);
+      setError('Network error while fetching wall data');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchWallData();
+  }, []);
+
+  const handleAddBrick = () => {
+    setPromptConfig({
+      isOpen: true,
+      title: 'Enter brick title:',
+      initialValue: '',
+      onConfirm: async (title: string) => {
+        setPromptConfig(null);
+        try {
+          const res = await apiFetch('/api/milestones', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ title, x: 0, y: 0, status: 'locked' })
+          });
+          if (res.ok) {
+            const newNode = await res.json();
+            setNodes(prev => [...prev, newNode]);
+          } else {
+            setError('Failed to create brick');
+          }
+        } catch (e) {
+          console.error('Failed to create node', e);
+          setError('Network error while creating brick');
+        }
+      }
+    });
+  };
+
+  const updateNodeStatus = async (id: number, status: 'locked' | 'active' | 'completed') => {
+    const node = nodes.find(n => n.id === id);
+    if (!node) return;
+    
+    // Optimistic
+    setNodes(prev => prev.map(n => n.id === id ? { ...n, status } : n));
+    
+    try {
+      const res = await apiFetch(`/api/milestones/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...node, status })
+      });
+      if (!res.ok) {
+        setError('Failed to update brick status');
+        fetchWallData();
+      }
+    } catch (e) {
+      console.error('Failed to update node', e);
+      setError('Network error while updating brick status');
+      fetchWallData();
+    }
+  };
+
+  const deleteNode = async (id: number) => {
+    // Optimistic
+    setNodes(prev => prev.filter(n => n.id !== id));
+    try {
+      const res = await apiFetch(`/api/milestones/${id}`, { method: 'DELETE' });
+      if (!res.ok) {
+        setError('Failed to delete brick');
+        fetchWallData(); // Revert
+      }
+    } catch (e) {
+      console.error('Failed to delete node', e);
+      setError('Network error while deleting brick');
+      fetchWallData(); // Revert
+    }
+    setSelectedNodeId(null);
+  };
+
+  const editNodeTitle = (id: number) => {
+    const node = nodes.find(n => n.id === id);
+    if (!node) return;
+    setPromptConfig({
+      isOpen: true,
+      title: 'Edit brick title:',
+      initialValue: node.title,
+      onConfirm: async (newTitle: string) => {
+        setPromptConfig(null);
+        if (!newTitle.trim() || newTitle === node.title) return;
+        
+        setNodes(prev => prev.map(n => n.id === id ? { ...n, title: newTitle } : n));
+        try {
+          const res = await apiFetch(`/api/milestones/${id}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ...node, title: newTitle })
+          });
+          if (!res.ok) {
+            setError('Failed to update brick title');
+            fetchWallData();
+          }
+        } catch (e) {
+          console.error('Failed to update node title', e);
+          setError('Network error while updating brick title');
+          fetchWallData();
+        }
+      }
+    });
+  };
+
+  // Add a dummy node for the "Lay Brick" button
+  const allNodes = [...nodes, { id: -1, title: '+ Lay Brick', status: 'add-button' as any, x: 0, y: 0 }];
+
+  // Calculate grid positions for each node
+  const nodesWithGrid = allNodes.map((node, i) => {
+    let row = 0;
+    let count = 0;
+    while (count + (row % 2 === 0 ? 3 : 4) <= i) {
+      count += row % 2 === 0 ? 3 : 4;
+      row++;
+    }
+    const colIndex = i - count;
+    const isOffset = row % 2 === 0;
+    return { ...node, row, colIndex, isOffset };
+  });
+
+  // Sort nodes so the highest row (top of the wall) renders first
+  const sortedNodes = [...nodesWithGrid].sort((a, b) => {
+    if (a.row !== b.row) return b.row - a.row;
+    return a.colIndex - b.colIndex;
+  });
+
+  return (
+    <div className="pb-32 min-h-screen bg-[#F5F5F0] flex flex-col pt-24" onClick={() => setSelectedNodeId(null)}>
+      <div className="fixed top-0 left-0 right-0 h-[88px] bg-[#F5F5F0]/90 backdrop-blur-md z-40 flex items-end justify-between px-6 pb-4 border-b-3 border-black">
+        <span className="font-display text-[18px] text-black uppercase tracking-widest">
+          The Wall
+        </span>
+      </div>
+
+      <AnimatePresence>
+        {error && (
+          <motion.div 
+            initial={{ opacity: 0, y: -20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -20 }}
+            className="fixed top-24 left-1/2 -translate-x-1/2 z-50 bg-bold-red text-white px-6 py-3 border-3 border-black shadow-[4px_4px_0px_#000000] font-display uppercase tracking-widest text-sm flex items-center gap-4"
+          >
+            {error}
+            <button onClick={() => setError(null)} className="hover:text-black transition-colors"><X size={16}/></button>
+          </motion.div>
+        )}
+        {promptConfig?.isOpen && (
+          <PromptModal 
+            isOpen={promptConfig.isOpen}
+            title={promptConfig.title}
+            initialValue={promptConfig.initialValue}
+            onConfirm={(val) => {
+              promptConfig.onConfirm(val);
+            }}
+            onCancel={() => setPromptConfig(null)}
+          />
+        )}
+      </AnimatePresence>
+
+      <div className="flex-1 flex flex-col justify-end items-center px-4 overflow-y-auto pb-12 pt-12">
+        {loading ? (
+          <div className="font-display uppercase tracking-widest animate-pulse">Building...</div>
+        ) : (
+          <div className="grid grid-cols-8 gap-2 w-full max-w-3xl">
+            {sortedNodes.map((node, nodeIndex) => (
+              <motion.div
+                key={node.id}
+                initial={{ opacity: 0, scale: 0.8, y: 20 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                transition={{ delay: (node.row * 0.1) + (node.colIndex * 0.05), type: 'spring', stiffness: 200, damping: 20 }}
+                onClick={(e) => { 
+                  e.stopPropagation(); 
+                  if (node.id === -1) {
+                    handleAddBrick();
+                  } else {
+                    setSelectedNodeId(node.id === selectedNodeId ? null : node.id); 
+                  }
+                }}
+                className={cn(
+                  "relative h-20 col-span-2 border-4 border-black flex items-center justify-center cursor-pointer shadow-[4px_4px_0px_#000000] transition-all hover:-translate-y-1 hover:shadow-[4px_8px_0px_#000000]",
+                  node.isOffset && node.colIndex === 0 ? "col-start-2" : "",
+                  node.status === 'completed' ? 'bg-racing-green text-white' : 
+                  node.status === 'active' ? 'bg-signal-yellow text-black' : 
+                  node.status === 'add-button' ? 'bg-transparent border-dashed text-black/50 hover:bg-black/5 hover:text-black' :
+                  'bg-white text-black',
+                  selectedNodeId === node.id ? 'ring-4 ring-black ring-offset-4 ring-offset-[#F5F5F0] z-10' : 'z-0'
+                )}
+              >
+                {/* Inner brick detail */}
+                {node.status !== 'add-button' && (
+                  <>
+                    <div className="absolute inset-0 border-b-2 border-black/10 top-1/2 pointer-events-none" />
+                    <div className="absolute inset-0 border-r-2 border-black/10 left-1/2 pointer-events-none" />
+                  </>
+                )}
+
+                {node.status === 'active' && (
+                  <div className="absolute -top-6 text-xl animate-bounce">🏗️</div>
+                )}
+                <span className="font-display text-xs uppercase tracking-widest text-center px-2 leading-tight break-words w-full z-10">
+                  {node.title}
+                </span>
+
+                {selectedNodeId === node.id && node.status !== 'add-button' && (
+                  <div className="absolute bottom-full mb-4 left-1/2 -translate-x-1/2 flex gap-2 bg-white border-3 border-black p-2 shadow-[4px_4px_0px_#000000] z-50">
+                    <button onClick={(e) => { e.stopPropagation(); updateNodeStatus(node.id, 'active'); }} className="p-2 hover:bg-gray-100 text-black" title="Set Active">▶️</button>
+                    <button onClick={(e) => { e.stopPropagation(); updateNodeStatus(node.id, 'completed'); }} className="p-2 hover:bg-gray-100 text-black" title="Complete">✅</button>
+                    <button onClick={(e) => { e.stopPropagation(); updateNodeStatus(node.id, 'locked'); }} className="p-2 hover:bg-gray-100 text-black" title="Lock">🔒</button>
+                    <button onClick={(e) => { e.stopPropagation(); editNodeTitle(node.id); }} className="p-2 hover:bg-gray-100 text-black" title="Edit Title">✏️</button>
+                    <button onClick={(e) => { e.stopPropagation(); deleteNode(node.id); }} className="p-2 hover:bg-gray-100 text-bold-red" title="Delete"><Trash2 size={16}/></button>
+                  </div>
+                )}
+              </motion.div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
 const LoginScreen = ({ onLogin }: { onLogin: () => void }) => {
   const [isRegistering, setIsRegistering] = useState(false);
   const [isForgotPassword, setIsForgotPassword] = useState(false);
@@ -253,7 +509,7 @@ const LoginScreen = ({ onLogin }: { onLogin: () => void }) => {
 const TabBar = ({ activeTab, onTabChange }: { activeTab: string; onTabChange: (tab: string) => void }) => {
   return (
     <div className="fixed bottom-0 left-0 right-0 h-24 bg-[#F5F5F0] border-t-3 border-black flex justify-around items-center pb-6 z-50">
-      {['today', 'trends', 'settings'].map((tab) => (
+      {['today', 'trends', 'wall', 'settings'].map((tab) => (
         <button
           key={tab}
           onClick={() => onTabChange(tab)}
@@ -261,6 +517,7 @@ const TabBar = ({ activeTab, onTabChange }: { activeTab: string; onTabChange: (t
         >
           {tab === 'today' && <Calendar strokeWidth={activeTab === 'today' ? 3 : 2} className={cn("w-7 h-7 transition-colors", activeTab === 'today' ? "text-black" : "text-black/30")} />}
           {tab === 'trends' && <BarChart2 strokeWidth={activeTab === 'trends' ? 3 : 2} className={cn("w-7 h-7 transition-colors", activeTab === 'trends' ? "text-black" : "text-black/30")} />}
+          {tab === 'wall' && <svg className={cn("w-7 h-7 transition-colors", activeTab === 'wall' ? "text-black" : "text-black/30")} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={activeTab === 'wall' ? 3 : 2} strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="3" y1="9" x2="21" y2="9"></line><line x1="3" y1="15" x2="21" y2="15"></line><line x1="9" y1="9" x2="9" y2="15"></line><line x1="15" y1="15" x2="15" y2="21"></line><line x1="15" y1="3" x2="15" y2="9"></line></svg>}
           {tab === 'settings' && <SettingsIcon strokeWidth={activeTab === 'settings' ? 3 : 2} className={cn("w-7 h-7 transition-colors", activeTab === 'settings' ? "text-black" : "text-black/30")} />}
           
           {activeTab === tab && (
@@ -325,8 +582,8 @@ const HabitItem: FC<HabitItemProps> = ({ habit, onToggle, onDelete, onEdit }) =>
       layout
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, height: 0, marginBottom: 0 }}
-      className="relative mb-6 group"
+      exit={{ opacity: 0, height: 0 }}
+      className="relative group h-full"
     >
       {/* Background Actions */}
       <div className="absolute inset-0 flex items-center justify-end pr-6 bg-black rounded-none overflow-hidden border-3 border-black shadow-[4px_4px_0px_#000000]">
@@ -346,7 +603,7 @@ const HabitItem: FC<HabitItemProps> = ({ habit, onToggle, onDelete, onEdit }) =>
         onDragEnd={handleDragEnd}
         style={{ x }}
         className={cn(
-          "habit-item p-6 flex items-center justify-between cursor-pointer rounded-none relative z-10",
+          "habit-item p-3 md:p-6 flex flex-col md:flex-row items-start md:items-center justify-between cursor-pointer rounded-none relative z-10 h-full min-h-[100px] md:min-h-0",
           habit.completed ? cn("is-active", colorClass) : habit.status === 'skipped' ? "bg-gray-200" : "bg-white"
         )}
         onClick={() => {
@@ -360,23 +617,25 @@ const HabitItem: FC<HabitItemProps> = ({ habit, onToggle, onDelete, onEdit }) =>
         }}
       >
         {/* Content Layer */}
-        <div className="flex items-center justify-between w-full relative z-10">
+        <div className="flex flex-col md:flex-row items-start md:items-center justify-between w-full h-full relative z-10 gap-2 md:gap-0">
           <span className={cn(
-            "text-3xl font-serif italic transition-colors duration-300",
+            "text-base leading-tight md:text-3xl font-serif italic transition-colors duration-300 line-clamp-3 md:line-clamp-none",
             habit.completed && colorClass !== 'bg-signal-yellow' ? "text-white" : habit.status === 'skipped' ? "text-gray-500 line-through" : "text-black"
           )}>
             {habit.title}
           </span>
 
-          <div className={cn(
-            "habit-checkbox w-8 h-8 flex items-center justify-center transition-colors duration-300",
-            habit.completed ? "border-black" : habit.status === 'skipped' ? "border-gray-400" : "border-black"
-          )}>
-            {habit.status === 'skipped' ? (
-              <X className="w-6 h-6 text-gray-500" strokeWidth={4} />
-            ) : (
-              <Check className={cn("w-6 h-6 transition-opacity duration-300 check-icon", habit.completed ? "opacity-100" : "opacity-0")} strokeWidth={4} />
-            )}
+          <div className="flex justify-end w-full md:w-auto mt-auto md:mt-0">
+            <div className={cn(
+              "habit-checkbox w-6 h-6 md:w-8 md:h-8 flex items-center justify-center transition-colors duration-300 shrink-0",
+              habit.completed ? "border-black" : habit.status === 'skipped' ? "border-gray-400" : "border-black"
+            )}>
+              {habit.status === 'skipped' ? (
+                <X className="w-4 h-4 md:w-6 md:h-6 text-gray-500" strokeWidth={4} />
+              ) : (
+                <Check className={cn("w-4 h-4 md:w-6 md:h-6 transition-opacity duration-300 check-icon", habit.completed ? "opacity-100" : "opacity-0")} strokeWidth={4} />
+              )}
+            </div>
           </div>
         </div>
       </motion.div>
@@ -654,22 +913,45 @@ const YearlyView = ({ data }: { data: StatData }) => {
 
 const TodayScreen = ({ habits, onToggle, onDelete, onEdit, onAdd }: any) => {
   const { scrollY } = useScroll();
+  const [activeMilestone, setActiveMilestone] = useState<Milestone | null>(null);
+
+  useEffect(() => {
+    apiFetch('/api/milestones')
+      .then(res => res.json())
+      .then(data => {
+        if (data.nodes) {
+          const active = data.nodes.find((n: Milestone) => n.status === 'active');
+          setActiveMilestone(active || null);
+        }
+      })
+      .catch(e => console.error('Failed to fetch active milestone', e));
+  }, []);
 
   return (
     <div className="pb-32 min-h-screen bg-[#F5F5F0]">
       <Header title="Today" scrollY={scrollY} />
       
-      <div className="px-6 mt-8">
-        <div className="flex justify-between items-center mb-10">
-          <span className="text-black font-display text-sm uppercase tracking-widest">
+      <div className="px-4 md:px-6 mt-4 md:mt-8">
+        <div className="flex justify-between items-center mb-6 md:mb-10">
+          <span className="text-black font-display text-xs md:text-sm uppercase tracking-widest">
             {format(new Date(), 'EEEE, MMM d')}
           </span>
-          <span className="text-black font-display text-sm">
+          <span className="text-black font-display text-xs md:text-sm">
             {habits.filter((h: Habit) => h.completed).length}/{habits.length}
           </span>
         </div>
 
-        <div className="space-y-2">
+        {activeMilestone && (
+          <div className="mb-6 md:mb-8 p-3 md:p-4 border-3 border-black bg-electric-blue text-black shadow-[4px_4px_0px_#000000] flex items-center gap-3 md:gap-4">
+            <div className="text-xl md:text-2xl animate-bounce">📍</div>
+            <div>
+              <div className="font-display text-[8px] md:text-[10px] uppercase tracking-widest opacity-60 mb-1">Current Milestone</div>
+              <div className="font-display text-sm md:text-lg uppercase tracking-tight">{activeMilestone.title}</div>
+            </div>
+          </div>
+        )}
+
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-1 md:gap-2">
           <AnimatePresence mode='popLayout'>
             {habits.length > 0 ? (
               habits.map((habit: Habit) => (
@@ -685,7 +967,7 @@ const TodayScreen = ({ habits, onToggle, onDelete, onEdit, onAdd }: any) => {
               <motion.div 
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
-                className="py-24 text-center border-3 border-black bg-white shadow-[4px_4px_0px_#000000]"
+                className="col-span-2 md:col-span-1 py-24 text-center border-3 border-black bg-white shadow-[4px_4px_0px_#000000]"
               >
                 <p className="text-black font-display text-lg uppercase tracking-widest mb-3">No habits yet</p>
                 <p className="text-black/60 text-lg font-serif italic">Tap the button below to start your journey</p>
@@ -779,6 +1061,54 @@ const TrendsScreen = () => {
           </div>
         </div>
       </div>
+    </div>
+  );
+};
+
+const PromptModal = ({ isOpen, title, initialValue, onConfirm, onCancel }: { isOpen: boolean; title: string; initialValue: string; onConfirm: (val: string) => void; onCancel: () => void }) => {
+  const [value, setValue] = useState(initialValue);
+  
+  useEffect(() => {
+    setValue(initialValue);
+  }, [initialValue, isOpen]);
+
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-[#F5F5F0]/90 backdrop-blur-sm p-6">
+      <motion.div 
+        initial={{ scale: 0.9, opacity: 0 }}
+        animate={{ scale: 1, opacity: 1 }}
+        exit={{ scale: 0.9, opacity: 0 }}
+        className="w-full max-w-sm bg-white border-3 border-black p-8 shadow-[8px_8px_0px_#000000] rounded-none"
+      >
+        <h3 className="font-display text-xl uppercase tracking-tighter mb-4 text-center">{title}</h3>
+        <input 
+          autoFocus
+          type="text"
+          value={value}
+          onChange={e => setValue(e.target.value)}
+          className="w-full border-3 border-black p-3 font-serif text-lg mb-6 focus:outline-none focus:ring-2 focus:ring-electric-blue"
+          onKeyDown={e => {
+            if (e.key === 'Enter' && value.trim()) onConfirm(value.trim());
+            if (e.key === 'Escape') onCancel();
+          }}
+        />
+        <div className="flex gap-4">
+          <button 
+            onClick={onCancel}
+            className="flex-1 py-3 border-3 border-black bg-white text-black font-display text-xs uppercase tracking-widest hover:bg-gray-100 transition-colors rounded-none shadow-[4px_4px_0px_#000000] active:translate-y-1 active:translate-x-1 active:shadow-[0px_0px_0px_#000000]"
+          >
+            Cancel
+          </button>
+          <button 
+            onClick={() => value.trim() && onConfirm(value.trim())}
+            className="flex-1 py-3 border-3 border-black bg-black text-white font-display text-xs uppercase tracking-widest hover:bg-electric-blue transition-colors rounded-none shadow-[4px_4px_0px_#000000] active:translate-y-1 active:translate-x-1 active:shadow-[0px_0px_0px_#000000]"
+          >
+            Save
+          </button>
+        </div>
+      </motion.div>
     </div>
   );
 };
@@ -1341,6 +1671,7 @@ export default function App() {
           />
         )}
         {activeTab === 'trends' && <TrendsScreen />}
+        {activeTab === 'wall' && <WallScreen />}
         {activeTab === 'settings' && <SettingsScreen onHabitRestored={fetchHabits} />}
 
         <TabBar activeTab={activeTab} onTabChange={setActiveTab} />

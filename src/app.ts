@@ -465,5 +465,84 @@ export const createApp = async () => {
     }
   });
 
+  // --- Milestones API ---
+  app.get('/api/milestones', requireAuth, async (req: any, res) => {
+    try {
+      const nodesResult = await db.query('SELECT * FROM milestones WHERE user_id = $1', [req.user.id]);
+      const edgesResult = await db.query('SELECT * FROM milestone_edges WHERE user_id = $1', [req.user.id]);
+      res.json({ nodes: nodesResult.rows, edges: edgesResult.rows });
+    } catch (error) {
+      console.error('Failed to fetch milestones:', error);
+      res.status(500).json({ error: 'Failed to fetch milestones' });
+    }
+  });
+
+  app.post('/api/milestones', requireAuth, async (req: any, res) => {
+    const { title, x, y, status } = req.body;
+    try {
+      const result = await db.query(
+        'INSERT INTO milestones (user_id, title, x, y, status) VALUES ($1, $2, $3, $4, $5) RETURNING id',
+        [req.user.id, title, x, y, status || 'locked']
+      );
+      const id = result.lastInsertRowid || result.rows[0]?.id;
+      res.json({ id, user_id: req.user.id, title, x, y, status: status || 'locked' });
+    } catch (error) {
+      console.error('Failed to create milestone:', error);
+      res.status(500).json({ error: 'Failed to create milestone' });
+    }
+  });
+
+  app.put('/api/milestones/:id', requireAuth, async (req: any, res) => {
+    const { id } = req.params;
+    const { title, x, y, status } = req.body;
+    try {
+      await db.query(
+        'UPDATE milestones SET title = $1, x = $2, y = $3, status = $4 WHERE id = $5 AND user_id = $6',
+        [title, x, y, status, id, req.user.id]
+      );
+      res.json({ success: true });
+    } catch (error) {
+      console.error('Failed to update milestone:', error);
+      res.status(500).json({ error: 'Failed to update milestone' });
+    }
+  });
+
+  app.delete('/api/milestones/:id', requireAuth, async (req: any, res) => {
+    const { id } = req.params;
+    try {
+      await db.query('DELETE FROM milestones WHERE id = $1 AND user_id = $2', [id, req.user.id]);
+      res.json({ success: true });
+    } catch (error) {
+      console.error('Failed to delete milestone:', error);
+      res.status(500).json({ error: 'Failed to delete milestone' });
+    }
+  });
+
+  app.post('/api/milestones/edges', requireAuth, async (req: any, res) => {
+    const { from_id, to_id } = req.body;
+    try {
+      const result = await db.query(
+        'INSERT INTO milestone_edges (user_id, from_id, to_id) VALUES ($1, $2, $3) RETURNING id',
+        [req.user.id, from_id, to_id]
+      );
+      const id = result.lastInsertRowid || result.rows[0]?.id;
+      res.json({ id, user_id: req.user.id, from_id, to_id });
+    } catch (error) {
+      console.error('Failed to create edge:', error);
+      res.status(500).json({ error: 'Failed to create edge' });
+    }
+  });
+
+  app.delete('/api/milestones/edges/:id', requireAuth, async (req: any, res) => {
+    const { id } = req.params;
+    try {
+      await db.query('DELETE FROM milestone_edges WHERE id = $1 AND user_id = $2', [id, req.user.id]);
+      res.json({ success: true });
+    } catch (error) {
+      console.error('Failed to delete edge:', error);
+      res.status(500).json({ error: 'Failed to delete edge' });
+    }
+  });
+
   return app;
 };
