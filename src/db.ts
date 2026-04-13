@@ -20,11 +20,12 @@ class SQLiteAdapter {
       CREATE TABLE IF NOT EXISTS users (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         google_id TEXT UNIQUE NOT NULL,
-        email TEXT NOT NULL,
+        email TEXT NOT NULL UNIQUE,
         name TEXT,
         picture TEXT,
         password TEXT,
         recovery_code TEXT,
+        recovery_code_created_at TEXT,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
       );
 
@@ -84,28 +85,30 @@ class SQLiteAdapter {
     try { this.db.exec(`ALTER TABLE completions ADD COLUMN status TEXT DEFAULT 'completed';`); } catch (e) {}
     try { this.db.exec(`ALTER TABLE users ADD COLUMN password TEXT;`); } catch (e) {}
     try { this.db.exec(`ALTER TABLE users ADD COLUMN recovery_code TEXT;`); } catch (e) {}
+    try { this.db.exec(`ALTER TABLE users ADD COLUMN recovery_code_created_at TEXT;`); } catch (e) {}
   }
 
   async query(text: string, params: any[] = []): Promise<QueryResult> {
-    // Convert Postgres-style $1, $2 to SQLite-style ?, ?
-    let sqliteQuery = text;
-    let paramIndex = 1;
-    while (sqliteQuery.includes(`$${paramIndex}`)) {
-      sqliteQuery = sqliteQuery.replace(`$${paramIndex}`, '?');
-      paramIndex++;
-    }
+    // Convert Postgres-style $1, $2, ... to SQLite-style ?, ?, ...
+    // Scan left-to-right so repeated $N (e.g. subqueries) produce correctly
+    // ordered positional params: "$1 ... $2 ... $1" → [p1, p2, p1].
+    const expandedParams: any[] = [];
+    const sqliteQuery = text.replace(/\$(\d+)/g, (_, n) => {
+      expandedParams.push(params[Number(n) - 1]);
+      return '?';
+    });
 
     const stmt = this.db.prepare(sqliteQuery);
-    
+
     if (sqliteQuery.trim().toUpperCase().startsWith('SELECT')) {
-      const rows = stmt.all(...params);
+      const rows = stmt.all(...expandedParams);
       return { rows };
     } else {
-      const info = stmt.run(...params);
-      return { 
-        rows: [], 
-        lastInsertRowid: info.lastInsertRowid, 
-        changes: info.changes 
+      const info = stmt.run(...expandedParams);
+      return {
+        rows: [],
+        lastInsertRowid: info.lastInsertRowid,
+        changes: info.changes
       };
     }
   }
@@ -133,6 +136,7 @@ class PostgresAdapter {
           picture TEXT,
           password TEXT,
           recovery_code TEXT,
+          recovery_code_created_at TEXT,
           created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
       `);
@@ -200,6 +204,9 @@ class PostgresAdapter {
       try { await this.pool.query(`ALTER TABLE completions ADD COLUMN status TEXT DEFAULT 'completed';`); } catch (e) {}
       try { await this.pool.query(`ALTER TABLE users ADD COLUMN password TEXT;`); } catch (e) {}
       try { await this.pool.query(`ALTER TABLE users ADD COLUMN recovery_code TEXT;`); } catch (e) {}
+      try { await this.pool.query(`ALTER TABLE users ADD COLUMN recovery_code_created_at TEXT;`); } catch (e) {}
+      // Add unique index on email for existing Postgres installs (safe: IF NOT EXISTS)
+      try { await this.pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users(email);`); } catch (e) {}
     } catch (error) {
       console.error('PostgresAdapter: Initialization failed:', error);
       throw error;

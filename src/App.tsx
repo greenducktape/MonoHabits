@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, type FC, useRef, type ChangeEvent, createContext, useContext } from 'react';
 import { motion, AnimatePresence, useScroll, useTransform, PanInfo, useMotionValue } from 'motion/react';
-import { format, subDays, eachDayOfInterval, startOfYear, endOfYear, parseISO, getDay, startOfWeek, endOfWeek, startOfMonth, endOfMonth, isSameDay, isSameMonth, addMonths, subMonths, isValid } from 'date-fns';
+import { format, subDays, addDays, eachDayOfInterval, startOfYear, endOfYear, parseISO, getDay, startOfWeek, endOfWeek, startOfMonth, endOfMonth, isSameDay, isSameMonth, addMonths, subMonths, isValid } from 'date-fns';
 import { Plus, Check, Trash2, Archive, BarChart2, Calendar, Settings as SettingsIcon, X, ChevronRight, ChevronLeft, Upload, Download, FileText } from 'lucide-react';
 import { cn } from './lib/utils';
 import { Habit, StatData } from './types';
@@ -643,7 +643,7 @@ const HabitItem: FC<HabitItemProps> = ({ habit, onToggle, onDelete, onEdit }) =>
   );
 };
 
-const AddHabitModal = ({ isOpen, onClose, onSave, onDelete, onSkip, initialHabit }: { isOpen: boolean; onClose: () => void; onSave: (title: string) => void; onDelete?: (id: number) => void; onSkip?: (id: number) => void; initialHabit?: Habit | null }) => {
+const AddHabitModal = ({ isOpen, onClose, onSave, onDelete, onSkip, initialHabit, dateLabel }: { isOpen: boolean; onClose: () => void; onSave: (title: string) => void; onDelete?: (id: number) => void; onSkip?: (id: number) => void; initialHabit?: Habit | null; dateLabel?: string }) => {
   const [title, setTitle] = useState(initialHabit?.title || '');
 
   useEffect(() => {
@@ -696,7 +696,7 @@ const AddHabitModal = ({ isOpen, onClose, onSave, onDelete, onSkip, initialHabit
               }}
               className="w-full py-5 bg-[#F5F5F0] text-black border-3 border-black font-display text-sm uppercase tracking-widest hover:bg-black hover:text-white transition-colors rounded-none shadow-[4px_4px_0px_#000000] active:translate-y-1 active:translate-x-1 active:shadow-[0px_0px_0px_#000000]"
             >
-              {initialHabit.status === 'skipped' ? 'Unskip for Today' : 'Skip for Today'}
+              {initialHabit.status === 'skipped' ? `Unskip for ${dateLabel ?? 'Today'}` : `Skip for ${dateLabel ?? 'Today'}`}
             </button>
           )}
 
@@ -911,7 +911,7 @@ const YearlyView = ({ data }: { data: StatData }) => {
 
 // --- Screens ---
 
-const TodayScreen = ({ habits, onToggle, onDelete, onEdit, onAdd }: any) => {
+const TodayScreen = ({ habits, loading, selectedDate, isViewingToday, onPrevDay, onNextDay, onToggle, onDelete, onEdit, onAdd }: any) => {
   const { scrollY } = useScroll();
   const [activeMilestone, setActiveMilestone] = useState<Milestone | null>(null);
 
@@ -929,13 +929,28 @@ const TodayScreen = ({ habits, onToggle, onDelete, onEdit, onAdd }: any) => {
 
   return (
     <div className="pb-32 min-h-screen bg-[#F5F5F0]">
-      <Header title="Today" scrollY={scrollY} />
-      
+      <Header title={isViewingToday ? 'Today' : format(selectedDate, 'MMM d')} scrollY={scrollY} />
+
       <div className="px-4 md:px-6 mt-4 md:mt-8">
         <div className="flex justify-between items-center mb-6 md:mb-10">
-          <span className="text-black font-display text-xs md:text-sm uppercase tracking-widest">
-            {format(new Date(), 'EEEE, MMM d')}
-          </span>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={onPrevDay}
+              className="w-8 h-8 flex items-center justify-center border-3 border-black bg-white hover:bg-signal-yellow transition-colors shadow-[2px_2px_0px_#000000] active:translate-y-px active:translate-x-px active:shadow-none"
+            >
+              <ChevronLeft className="w-4 h-4" strokeWidth={3} />
+            </button>
+            <span className="text-black font-display text-xs md:text-sm uppercase tracking-widest">
+              {format(selectedDate, 'EEEE, MMM d')}
+            </span>
+            <button
+              onClick={onNextDay}
+              disabled={isViewingToday}
+              className="w-8 h-8 flex items-center justify-center border-3 border-black bg-white hover:bg-signal-yellow transition-colors shadow-[2px_2px_0px_#000000] active:translate-y-px active:translate-x-px active:shadow-none disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-white"
+            >
+              <ChevronRight className="w-4 h-4" strokeWidth={3} />
+            </button>
+          </div>
           <span className="text-black font-display text-xs md:text-sm">
             {habits.filter((h: Habit) => h.completed).length}/{habits.length}
           </span>
@@ -951,30 +966,46 @@ const TodayScreen = ({ habits, onToggle, onDelete, onEdit, onAdd }: any) => {
           </div>
         )}
 
-        <div className="grid grid-cols-2 gap-3 md:grid-cols-1 md:gap-2">
-          <AnimatePresence mode='popLayout'>
-            {habits.length > 0 ? (
-              habits.map((habit: Habit) => (
-                <HabitItem 
-                  key={habit.id}
-                  habit={habit} 
-                  onToggle={onToggle} 
-                  onDelete={onDelete}
-                  onEdit={onEdit}
-                />
-              ))
-            ) : (
-              <motion.div 
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                className="col-span-2 md:col-span-1 py-24 text-center border-3 border-black bg-white shadow-[4px_4px_0px_#000000]"
-              >
-                <p className="text-black font-display text-lg uppercase tracking-widest mb-3">No habits yet</p>
-                <p className="text-black/60 text-lg font-serif italic">Tap the button below to start your journey</p>
-              </motion.div>
-            )}
-          </AnimatePresence>
-        </div>
+        {loading ? (
+          <div className="py-24 text-center">
+            <motion.div
+              animate={{ opacity: [0.4, 1, 0.4] }}
+              transition={{ repeat: Infinity, duration: 1.5 }}
+              className="font-display text-sm uppercase tracking-widest text-black"
+            >
+              Loading...
+            </motion.div>
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-1 md:gap-2">
+            <AnimatePresence mode='popLayout'>
+              {habits.length > 0 ? (
+                habits.map((habit: Habit) => (
+                  <HabitItem
+                    key={habit.id}
+                    habit={habit}
+                    onToggle={onToggle}
+                    onDelete={onDelete}
+                    onEdit={onEdit}
+                  />
+                ))
+              ) : (
+                <motion.div
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  className="col-span-2 md:col-span-1 py-24 text-center border-3 border-black bg-white shadow-[4px_4px_0px_#000000]"
+                >
+                  <p className="text-black font-display text-lg uppercase tracking-widest mb-3">
+                    {isViewingToday ? 'No habits yet' : 'No records for this day'}
+                  </p>
+                  <p className="text-black/60 text-lg font-serif italic">
+                    {isViewingToday ? 'Tap the button below to start your journey' : 'Nothing was tracked on this date'}
+                  </p>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
+        )}
 
         <button
           onClick={onAdd}
@@ -1463,6 +1494,9 @@ export default function App() {
   const [user, setUser] = useState<any>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [paletteId, setPaletteId] = useState(() => localStorage.getItem('monohabit_palette') || 'traffic');
+  const [selectedDate, setSelectedDate] = useState<Date>(new Date());
+  const [pastHabits, setPastHabits] = useState<Habit[] | null>(null);
+  const [loadingPastHabits, setLoadingPastHabits] = useState(false);
 
   useEffect(() => {
     localStorage.setItem('monohabit_palette', paletteId);
@@ -1525,43 +1559,93 @@ export default function App() {
     }
   }, [user]);
 
+  const todayStr = format(new Date(), 'yyyy-MM-dd');
+  const isViewingToday = format(selectedDate, 'yyyy-MM-dd') === todayStr;
+  const displayHabits = isViewingToday ? habits : (pastHabits ?? []);
+
+  const fetchPastHabits = async (date: Date) => {
+    setLoadingPastHabits(true);
+    try {
+      const dateStr = format(date, 'yyyy-MM-dd');
+      const res = await apiFetch(`/api/habits?date=${dateStr}`);
+      if (!res.ok) throw new Error('Failed to fetch');
+      const data = await res.json();
+      setPastHabits(Array.isArray(data) ? data : []);
+    } catch (e) {
+      console.error('Fetch past habits error:', e);
+      setPastHabits([]);
+    } finally {
+      setLoadingPastHabits(false);
+    }
+  };
+
+  useEffect(() => {
+    if (user && !isViewingToday) {
+      fetchPastHabits(selectedDate);
+    }
+  }, [selectedDate, user]);
+
+  const handlePrevDay = () => setSelectedDate(prev => subDays(prev, 1));
+  const handleNextDay = () => {
+    setSelectedDate(prev => {
+      const next = addDays(prev, 1);
+      return next <= new Date() ? next : prev;
+    });
+  };
+
   const handleToggle = async (id: number) => {
+    const dateStr = format(selectedDate, 'yyyy-MM-dd');
     // Optimistic update
-    setHabits(prev => prev.map(h => h.id === id ? { ...h, completed: !h.completed, status: h.completed ? null : 'completed' } : h));
-    
+    if (isViewingToday) {
+      setHabits(prev => prev.map(h => h.id === id ? { ...h, completed: !h.completed, status: h.completed ? null : 'completed' } : h));
+    } else {
+      setPastHabits(prev => prev?.map(h => h.id === id ? { ...h, completed: !h.completed, status: h.completed ? null : 'completed' } : h) ?? null);
+    }
+
     try {
       const res = await apiFetch(`/api/habits/${id}/toggle`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ date: format(new Date(), 'yyyy-MM-dd') })
+        body: JSON.stringify({ date: dateStr })
       });
       if (!res.ok) throw new Error('Toggle failed');
       const data = await res.json();
-      setHabits(prev => prev.map(h => h.id === id ? { ...h, completed: data.completed, status: data.status } : h));
+      if (isViewingToday) {
+        setHabits(prev => prev.map(h => h.id === id ? { ...h, completed: data.completed, status: data.status } : h));
+      } else {
+        setPastHabits(prev => prev?.map(h => h.id === id ? { ...h, completed: data.completed, status: data.status } : h) ?? null);
+      }
     } catch (e) {
       console.error('Toggle error:', e);
-      // Revert optimistic update on failure
-      fetchHabits();
+      if (isViewingToday) fetchHabits(); else fetchPastHabits(selectedDate);
     }
   };
 
   const handleSkip = async (id: number) => {
+    const dateStr = format(selectedDate, 'yyyy-MM-dd');
     // Optimistic update
-    setHabits(prev => prev.map(h => h.id === id ? { ...h, completed: false, status: h.status === 'skipped' ? null : 'skipped' } : h));
-    
+    if (isViewingToday) {
+      setHabits(prev => prev.map(h => h.id === id ? { ...h, completed: false, status: h.status === 'skipped' ? null : 'skipped' } : h));
+    } else {
+      setPastHabits(prev => prev?.map(h => h.id === id ? { ...h, completed: false, status: h.status === 'skipped' ? null : 'skipped' } : h) ?? null);
+    }
+
     try {
       const res = await apiFetch(`/api/habits/${id}/skip`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ date: format(new Date(), 'yyyy-MM-dd') })
+        body: JSON.stringify({ date: dateStr })
       });
       if (!res.ok) throw new Error('Skip failed');
       const data = await res.json();
-      setHabits(prev => prev.map(h => h.id === id ? { ...h, completed: data.completed, status: data.status } : h));
+      if (isViewingToday) {
+        setHabits(prev => prev.map(h => h.id === id ? { ...h, completed: data.completed, status: data.status } : h));
+      } else {
+        setPastHabits(prev => prev?.map(h => h.id === id ? { ...h, completed: data.completed, status: data.status } : h) ?? null);
+      }
     } catch (e) {
       console.error('Skip error:', e);
-      // Revert optimistic update on failure
-      fetchHabits();
+      if (isViewingToday) fetchHabits(); else fetchPastHabits(selectedDate);
     }
   };
 
@@ -1659,9 +1743,14 @@ export default function App() {
         )}
 
         {activeTab === 'today' && (
-          <TodayScreen 
-            habits={habits} 
-            onToggle={handleToggle} 
+          <TodayScreen
+            habits={displayHabits}
+            loading={loadingPastHabits}
+            selectedDate={selectedDate}
+            isViewingToday={isViewingToday}
+            onPrevDay={handlePrevDay}
+            onNextDay={handleNextDay}
+            onToggle={handleToggle}
             onDelete={handleDelete}
             onEdit={openEditModal}
             onAdd={() => {
@@ -1678,13 +1767,14 @@ export default function App() {
 
         <AnimatePresence>
           {isModalOpen && (
-            <AddHabitModal 
-              isOpen={isModalOpen} 
-              onClose={() => setIsModalOpen(false)} 
+            <AddHabitModal
+              isOpen={isModalOpen}
+              onClose={() => setIsModalOpen(false)}
               onSave={handleSaveHabit}
               onDelete={handleDelete}
               onSkip={handleSkip}
               initialHabit={editingHabit}
+              dateLabel={isViewingToday ? 'Today' : format(selectedDate, 'MMM d')}
             />
           )}
         </AnimatePresence>
