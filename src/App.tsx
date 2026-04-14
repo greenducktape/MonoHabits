@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, type FC, useRef, type ChangeEvent, createContext, useContext } from 'react';
-import { motion, AnimatePresence, useScroll, useTransform, PanInfo, useMotionValue } from 'motion/react';
+import { motion, AnimatePresence, useTransform, PanInfo, useMotionValue } from 'motion/react';
 import { format, subDays, addDays, eachDayOfInterval, startOfYear, endOfYear, parseISO, getDay, startOfWeek, endOfWeek, startOfMonth, endOfMonth, isSameDay, isSameMonth, addMonths, subMonths, isValid } from 'date-fns';
 import { Plus, Check, Trash2, Archive, BarChart2, Calendar, Settings as SettingsIcon, X, ChevronRight, ChevronLeft, Upload, Download, FileText } from 'lucide-react';
 import { cn } from './lib/utils';
@@ -560,33 +560,16 @@ const TabBar = ({ activeTab, onTabChange }: { activeTab: string; onTabChange: (t
   );
 };
 
-const Header = ({ title, scrollY }: { title: string; scrollY: any }) => {
-  const opacity = useTransform(scrollY, [0, 40], [0, 1]);
-  const y = useTransform(scrollY, [0, 40], [10, 0]);
-
+const Header = ({ title }: { title: string }) => {
   return (
-    <>
-      {/* Compact Navigation Bar */}
-      <div
-        className="fixed top-0 left-0 right-0 bg-[#F5F5F0]/90 backdrop-blur-md z-40 flex items-end justify-center pb-3 border-b-3 border-black pointer-events-none"
-        style={{ paddingTop: 'env(safe-area-inset-top)', height: 'calc(env(safe-area-inset-top) + 52px)' }}
-      >
-        <motion.span
-          style={{ opacity, y }}
-          className="font-display text-[15px] text-black uppercase tracking-widest"
-        >
-          {title}
-        </motion.span>
-      </div>
-
-      {/* Large Title */}
-      <div
-        className="px-4 md:px-6 pb-5 md:pb-8 border-b-3 border-black"
-        style={{ paddingTop: 'calc(env(safe-area-inset-top) + 64px)' }}
-      >
-        <h1 className="text-[38px] md:text-[56px] font-display text-black leading-none tracking-tighter uppercase">{title}</h1>
-      </div>
-    </>
+    <div
+      className="fixed top-0 left-0 right-0 bg-[#F5F5F0] border-b-3 border-black z-40 flex items-end justify-center pb-3"
+      style={{ paddingTop: 'env(safe-area-inset-top)', height: 'calc(env(safe-area-inset-top) + 52px)' }}
+    >
+      <span className="font-display text-[15px] text-black uppercase tracking-widest">
+        {title}
+      </span>
+    </div>
   );
 };
 
@@ -599,56 +582,106 @@ interface HabitItemProps {
 
 const HabitItem: FC<HabitItemProps> = ({ habit, onToggle, onDelete, onEdit }) => {
   const x = useMotionValue(0);
-  const deleteOpacity = useTransform(x, [-100, -50], [1, 0]);
-  const threshold = -80;
+  const actionsOpacity = useTransform(x, [-120, -60], [1, 0]);
+  const SNAP_THRESHOLD = -60;
+  const OPEN_X = -128;
 
-  const handleDragEnd = (event: any, info: PanInfo) => {
-    if (info.offset.x < threshold) {
-      onDelete(habit.id);
-    } 
+  const [isOpen, setIsOpen] = useState(false);
+
+  // Long press to edit
+  const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const longPressFired = useRef(false);
+
+  const handleTouchStart = () => {
+    longPressFired.current = false;
+    longPressTimer.current = setTimeout(() => {
+      longPressFired.current = true;
+      if (navigator.vibrate) navigator.vibrate(50);
+      onEdit(habit);
+    }, 500);
+  };
+
+  const handleTouchEnd = () => {
+    if (longPressTimer.current) clearTimeout(longPressTimer.current);
+  };
+
+  const handleTouchMove = () => {
+    if (longPressTimer.current) clearTimeout(longPressTimer.current);
+  };
+
+  const handleDragEnd = (_event: any, info: PanInfo) => {
+    if (info.offset.x < SNAP_THRESHOLD) {
+      setIsOpen(true);
+      x.set(OPEN_X);
+    } else {
+      setIsOpen(false);
+      x.set(0);
+    }
+  };
+
+  const handleClick = () => {
+    if (longPressFired.current) return;
+    if (isOpen) {
+      setIsOpen(false);
+      x.set(0);
+      return;
+    }
+    onToggle(habit.id);
+    if (navigator.vibrate) navigator.vibrate(10);
+  };
+
+  const handleContextMenu = (e: React.MouseEvent) => {
+    e.preventDefault();
+    onEdit(habit);
+    if (navigator.vibrate) navigator.vibrate(50);
   };
 
   const primaryColors = ['bg-electric-blue', 'bg-signal-yellow', 'bg-bold-red', 'bg-racing-green'];
   const colorClass = primaryColors[habit.id % primaryColors.length];
 
   return (
-    <motion.div 
+    <motion.div
       layout
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, height: 0 }}
-      className="relative group h-full"
+      className="relative group h-full overflow-hidden"
     >
-      {/* Background Actions */}
-      <div className="absolute inset-0 flex items-center justify-end pr-6 bg-black rounded-none overflow-hidden border-3 border-black shadow-[4px_4px_0px_#000000]">
-        <motion.span 
-          style={{ opacity: deleteOpacity }}
-          className="font-display text-sm text-white uppercase tracking-widest"
+      {/* Background Actions: Edit + Delete */}
+      <motion.div
+        style={{ opacity: actionsOpacity }}
+        className="absolute inset-y-0 right-0 flex items-stretch border-3 border-black shadow-[4px_4px_0px_#000000]"
+      >
+        <button
+          onClick={() => { setIsOpen(false); x.set(0); onEdit(habit); }}
+          className="w-16 bg-electric-blue flex flex-col items-center justify-center gap-1 border-r-2 border-black"
         >
-          Archive
-        </motion.span>
-      </div>
+          <span className="font-display text-[9px] text-white uppercase tracking-widest">Edit</span>
+        </button>
+        <button
+          onClick={() => { setIsOpen(false); x.set(0); onDelete(habit.id); }}
+          className="w-16 bg-bold-red flex flex-col items-center justify-center gap-1"
+        >
+          <span className="font-display text-[9px] text-white uppercase tracking-widest">Delete</span>
+        </button>
+      </motion.div>
 
       {/* Foreground Content */}
       <motion.div
         drag="x"
-        dragConstraints={{ left: 0, right: 0 }}
-        dragElastic={{ left: 0.5, right: 0 }}
+        dragConstraints={{ left: OPEN_X, right: 0 }}
+        dragElastic={{ left: 0.15, right: 0.05 }}
         onDragEnd={handleDragEnd}
         style={{ x }}
         className={cn(
           "habit-item px-4 py-4 md:px-6 md:py-5 flex flex-row items-center justify-between gap-3 cursor-pointer rounded-none relative z-10 min-h-[68px] md:min-h-0",
           habit.completed ? cn("is-active", colorClass) : habit.status === 'skipped' ? "bg-gray-200" : "bg-white"
         )}
-        onClick={() => {
-          onToggle(habit.id);
-          if (navigator.vibrate) navigator.vibrate(10);
-        }}
-        onContextMenu={(e) => {
-          e.preventDefault();
-          onEdit(habit);
-          if (navigator.vibrate) navigator.vibrate(50);
-        }}
+        onClick={handleClick}
+        onContextMenu={handleContextMenu}
+        onTouchStart={handleTouchStart}
+        onTouchEnd={handleTouchEnd}
+        onTouchMove={handleTouchMove}
       >
         <span className={cn(
           "text-lg leading-snug md:text-3xl font-serif italic transition-colors duration-300 flex-1",
@@ -1007,7 +1040,6 @@ const YearlyView = ({ data, onDayClick }: { data: StatData; onDayClick: (date: s
 // --- Screens ---
 
 const TodayScreen = ({ habits, loading, selectedDate, isViewingToday, onPrevDay, onNextDay, onToggle, onDelete, onEdit, onAdd }: any) => {
-  const { scrollY } = useScroll();
   const [activeMilestone, setActiveMilestone] = useState<Milestone | null>(null);
 
   useEffect(() => {
@@ -1026,9 +1058,9 @@ const TodayScreen = ({ habits, loading, selectedDate, isViewingToday, onPrevDay,
 
   return (
     <div className="pb-40 md:pb-32 min-h-screen bg-[#F5F5F0]">
-      <Header title={isViewingToday ? 'Today' : format(selectedDate, 'MMM d')} scrollY={scrollY} />
+      <Header title={isViewingToday ? 'Today' : format(selectedDate, 'EEE, MMM d')} />
 
-      <div className="px-4 md:px-6 mt-4 md:mt-6">
+      <div className="px-4 md:px-6 mt-4 md:mt-6" style={{ paddingTop: 'calc(env(safe-area-inset-top) + 52px + 1rem)' }}>
         {/* Date nav + counter row */}
         <div className="flex justify-between items-center mb-5 md:mb-10">
           <div className="flex items-center gap-1.5">
@@ -1140,7 +1172,6 @@ const TodayScreen = ({ habits, loading, selectedDate, isViewingToday, onPrevDay,
 };
 
 const TrendsScreen = () => {
-  const { scrollY } = useScroll();
   const [stats, setStats] = useState<StatData | null>(null);
   const [view, setView] = useState<'weekly' | 'monthly' | 'yearly'>('weekly');
   const [selectedDay, setSelectedDay] = useState<string | null>(null);
@@ -1167,9 +1198,9 @@ const TrendsScreen = () => {
 
   return (
     <div className="pb-32 min-h-screen bg-[#F5F5F0]">
-      <Header title="Trends" scrollY={scrollY} />
+      <Header title="Trends" />
 
-      <div className="px-4 md:px-6 mt-6 md:mt-8">
+      <div className="px-4 md:px-6 mt-6 md:mt-8" style={{ paddingTop: 'calc(env(safe-area-inset-top) + 52px + 1.5rem)' }}>
         {/* View Selector */}
         <div className="flex p-1 bg-white mb-6 md:mb-10 rounded-none border-3 border-black shadow-[4px_4px_0px_#000000]">
           {['weekly', 'monthly', 'yearly'].map((v) => (
@@ -1306,7 +1337,6 @@ const ConfirmModal = ({ isOpen, message, onConfirm, onCancel }: { isOpen: boolea
 };
 
 const SettingsScreen = ({ onHabitRestored }: { onHabitRestored: () => void }) => {
-  const { scrollY } = useScroll();
   const { paletteId, setPaletteId } = useContext(PaletteContext);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [importing, setImporting] = useState(false);
@@ -1435,10 +1465,10 @@ const SettingsScreen = ({ onHabitRestored }: { onHabitRestored: () => void }) =>
   
   return (
     <div className="pb-32 min-h-screen bg-[#F5F5F0]">
-      <Header title="Settings" scrollY={scrollY} />
-      
-      <div className="px-6 mt-8">
-        <div className="mt-8 mb-12">
+      <Header title="Settings" />
+
+      <div className="px-6 mt-8" style={{ paddingTop: 'calc(env(safe-area-inset-top) + 52px + 2rem)' }}>
+        <div className="mb-12">
           <h4 className="text-black font-display text-sm uppercase tracking-widest mb-6">Heatmap Palette</h4>
           <div className="space-y-4">
             {Object.entries(PALETTES).map(([id, palette]) => (
