@@ -528,57 +528,97 @@ export const createApp = async () => {
 
   app.post('/api/import', requireAuth, async (req: any, res) => {
     const { data } = req.body;
-
-    if (!Array.isArray(data)) {
-      return res.status(400).json({ error: 'Invalid data format' });
-    }
-
-    let importedCount = 0;
+    if (!Array.isArray(data)) return res.status(400).json({ error: 'Invalid data format' });
 
     try {
-      for (const item of data) {
-        if (!item.title || !item.date) continue;
-        const title = String(item.title).trim().slice(0, 100);
-        if (!title) continue;
+      const userId = req.user.id;
 
-        let habitResult = await db.query(
-          'SELECT id FROM habits WHERE title = $1 AND user_id = $2',
-          [title, req.user.id]
-        );
-        let habitId = habitResult.rows[0]?.id;
-
-        if (!habitId) {
-          const insertResult = await db.query(
-            'INSERT INTO habits (user_id, title, frequency) VALUES ($1, $2, $3) RETURNING id',
-            [req.user.id, title, 'daily']
-          );
-          habitId = insertResult.lastInsertRowid || insertResult.rows[0]?.id;
-        }
-
-        if (habitId) {
-          // Prefer explicit status field; fall back to completed boolean
-          const newStatus: string = item.status === 'skipped' ? 'skipped'
+      // 1. Normalize all rows up front
+      const validItems = (data as any[])
+        .filter(item => item.title && item.date)
+        .map(item => {
+          const title = String(item.title).trim().slice(0, 100);
+          if (!title) return null;
+          const status: string = item.status === 'skipped' ? 'skipped'
             : item.status === 'completed' ? 'completed'
             : item.completed !== false ? 'completed' : 'skipped';
-          const checkResult = await db.query(
-            'SELECT id, status FROM completions WHERE habit_id = $1 AND date = $2 AND user_id = $3',
-            [habitId, item.date, req.user.id]
-          );
-          const existing = checkResult.rows[0];
+          return { title, date: String(item.date), status };
+        })
+        .filter(Boolean) as { title: string; date: string; status: string }[];
 
-          if (!existing) {
-            await db.query(
-              'INSERT INTO completions (habit_id, user_id, date, status) VALUES ($1, $2, $3, $4)',
-              [habitId, req.user.id, item.date, newStatus]
-            );
-            importedCount++;
-          } else if (existing.status !== newStatus) {
-            await db.query('UPDATE completions SET status = $1 WHERE id = $2', [newStatus, existing.id]);
-            importedCount++;
-          }
+      if (validItems.length === 0) {
+        return res.status(400).json({ error: 'No valid data found. CSV must have "Date" and "Habit Title" columns.' });
+      }
+
+      // 2. One query to find all existing habits with matching titles
+      const uniqueTitles = [...new Set(validItems.map(i => i.title))];
+      const titleParams = uniqueTitles.map((_, i) => `$${i + 2}`).join(', ');
+      const existingHabits = await db.query(
+        `SELECT id, title FROM habits WHERE user_id = $1 AND title IN (${titleParams})`,
+        [userId, ...uniqueTitles]
+      );
+      const habitMap = new Map<string, number>(existingHabits.rows.map((h: any) => [h.title, Number(h.id)]));
+
+      // 3. Insert missing habits (one per new title, but no SELECT first)
+      for (const title of uniqueTitles.filter(t => !habitMap.has(t))) {
+        const result = await db.query(
+          'INSERT INTO habits (user_id, title, frequency) VALUES ($1, $2, $3) RETURNING id',
+          [userId, title, 'daily']
+        );
+        const newId = Number(result.lastInsertRowid ?? result.rows[0]?.id);
+        habitMap.set(title, newId);
+      }
+
+      // 4. One query to fetch all relevant existing completions
+      const allHabitIds = [...habitMap.values()];
+      const allDates = [...new Set(validItems.map(i => i.date))];
+      const habitIdParams = allHabitIds.map((_, i) => `$${i + 2}`).join(', ');
+      const dateParams = allDates.map((_, i) => `$${allHabitIds.length + i + 2}`).join(', ');
+      const existingResult = await db.query(
+        `SELECT id, habit_id, date, status FROM completions
+         WHERE user_id = $1 AND habit_id IN (${habitIdParams}) AND date IN (${dateParams})`,
+        [userId, ...allHabitIds, ...allDates]
+      );
+      const existingMap = new Map<string, { id: number; status: string }>(
+        existingResult.rows.map((c: any) => [`${c.habit_id}:${c.date}`, { id: Number(c.id), status: c.status }])
+      );
+
+      // 5. Categorize rows: new inserts vs status updates
+      const toInsert: { habitId: number; date: string; status: string }[] = [];
+      const toUpdate: { id: number; status: string }[] = [];
+      const seenKeys = new Set<string>();
+
+      for (const item of validItems) {
+        const habitId = habitMap.get(item.title);
+        if (!habitId) continue;
+        const key = `${habitId}:${item.date}`;
+        if (seenKeys.has(key)) continue; // dedupe same habit+date in CSV
+        seenKeys.add(key);
+
+        const existing = existingMap.get(key);
+        if (!existing) {
+          toInsert.push({ habitId, date: item.date, status: item.status });
+        } else if (existing.status !== item.status) {
+          toUpdate.push({ id: existing.id, status: item.status });
         }
       }
-      res.json({ success: true, count: importedCount });
+
+      // 6. Bulk INSERT in a single query
+      if (toInsert.length > 0) {
+        const valueRows = toInsert.map((_, i) => `($${i * 4 + 1}, $${i * 4 + 2}, $${i * 4 + 3}, $${i * 4 + 4})`).join(', ');
+        const params = toInsert.flatMap(r => [r.habitId, userId, r.date, r.status]);
+        await db.query(
+          `INSERT INTO completions (habit_id, user_id, date, status) VALUES ${valueRows}`,
+          params
+        );
+      }
+
+      // 7. Updates (typically few — only when re-importing changed statuses)
+      for (const u of toUpdate) {
+        await db.query('UPDATE completions SET status = $1 WHERE id = $2', [u.status, u.id]);
+      }
+
+      res.json({ success: true, count: toInsert.length + toUpdate.length });
     } catch (error) {
       console.error('Import error:', error);
       res.status(500).json({ error: 'Failed to import data' });
