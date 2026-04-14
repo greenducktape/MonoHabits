@@ -412,9 +412,9 @@ const LoginScreen = ({ onLogin }: { onLogin: () => void }) => {
 
   return (
     <div className="min-h-screen bg-[#F5F5F0] flex flex-col items-center justify-center p-6">
-      <div className="w-full max-w-md bg-white border-3 border-black p-10 shadow-[8px_8px_0px_#000000] rounded-none text-center">
-        <h1 className="text-5xl font-display text-black mb-4 uppercase tracking-tighter">MonoHabit</h1>
-        <p className="text-xl font-serif italic text-black/70 mb-10">Track your habits with brutalist elegance.</p>
+      <div className="w-full max-w-md bg-white border-3 border-black p-6 md:p-10 shadow-[8px_8px_0px_#000000] rounded-none text-center">
+        <h1 className="text-4xl md:text-5xl font-display text-black mb-3 uppercase tracking-tighter">MonoHabit</h1>
+        <p className="text-base md:text-xl font-serif italic text-black/70 mb-8 md:mb-10">Track your habits with brutalist elegance.</p>
         
         <h2 className="text-2xl font-display uppercase tracking-widest mb-6 border-b-2 border-black pb-2">
           {isForgotPassword ? 'Reset Password' : (isRegistering ? 'Create Account' : 'Login')}
@@ -506,51 +506,85 @@ const LoginScreen = ({ onLogin }: { onLogin: () => void }) => {
   );
 };
 
+const TAB_ITEMS = [
+  {
+    id: 'today', label: 'Today',
+    icon: (active: boolean) => <Calendar strokeWidth={active ? 3 : 2} className={cn("w-6 h-6 transition-colors", active ? "text-black" : "text-black/35")} />
+  },
+  {
+    id: 'trends', label: 'Trends',
+    icon: (active: boolean) => <BarChart2 strokeWidth={active ? 3 : 2} className={cn("w-6 h-6 transition-colors", active ? "text-black" : "text-black/35")} />
+  },
+  {
+    id: 'wall', label: 'Wall',
+    icon: (active: boolean) => (
+      <svg className={cn("w-6 h-6 transition-colors", active ? "text-black" : "text-black/35")} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={active ? 3 : 2} strokeLinecap="round" strokeLinejoin="round">
+        <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+        <line x1="3" y1="9" x2="21" y2="9"></line><line x1="3" y1="15" x2="21" y2="15"></line>
+        <line x1="9" y1="9" x2="9" y2="15"></line><line x1="15" y1="15" x2="15" y2="21"></line>
+        <line x1="15" y1="3" x2="15" y2="9"></line>
+      </svg>
+    )
+  },
+  {
+    id: 'settings', label: 'Settings',
+    icon: (active: boolean) => <SettingsIcon strokeWidth={active ? 3 : 2} className={cn("w-6 h-6 transition-colors", active ? "text-black" : "text-black/35")} />
+  },
+];
+
 const TabBar = ({ activeTab, onTabChange }: { activeTab: string; onTabChange: (tab: string) => void }) => {
   return (
-    <div className="fixed bottom-0 left-0 right-0 h-24 bg-[#F5F5F0] border-t-3 border-black flex justify-around items-center pb-6 z-50">
-      {['today', 'trends', 'wall', 'settings'].map((tab) => (
-        <button
-          key={tab}
-          onClick={() => onTabChange(tab)}
-          className="relative p-4 group"
-        >
-          {tab === 'today' && <Calendar strokeWidth={activeTab === 'today' ? 3 : 2} className={cn("w-7 h-7 transition-colors", activeTab === 'today' ? "text-black" : "text-black/30")} />}
-          {tab === 'trends' && <BarChart2 strokeWidth={activeTab === 'trends' ? 3 : 2} className={cn("w-7 h-7 transition-colors", activeTab === 'trends' ? "text-black" : "text-black/30")} />}
-          {tab === 'wall' && <svg className={cn("w-7 h-7 transition-colors", activeTab === 'wall' ? "text-black" : "text-black/30")} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={activeTab === 'wall' ? 3 : 2} strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="3" y1="9" x2="21" y2="9"></line><line x1="3" y1="15" x2="21" y2="15"></line><line x1="9" y1="9" x2="9" y2="15"></line><line x1="15" y1="15" x2="15" y2="21"></line><line x1="15" y1="3" x2="15" y2="9"></line></svg>}
-          {tab === 'settings' && <SettingsIcon strokeWidth={activeTab === 'settings' ? 3 : 2} className={cn("w-7 h-7 transition-colors", activeTab === 'settings' ? "text-black" : "text-black/30")} />}
-          
-          {activeTab === tab && (
-            <motion.div 
-              layoutId="activeTab"
-              className="absolute bottom-2 left-1/2 -translate-x-1/2 w-2 h-2 bg-black rounded-none"
-            />
-          )}
-        </button>
-      ))}
+    <div
+      className="fixed bottom-0 left-0 right-0 bg-[#F5F5F0]/95 backdrop-blur-sm border-t-3 border-black flex justify-around items-start pt-2 z-50"
+      style={{ paddingBottom: 'max(1.25rem, env(safe-area-inset-bottom))' }}
+    >
+      {TAB_ITEMS.map(({ id, label, icon }) => {
+        const active = activeTab === id;
+        return (
+          <button
+            key={id}
+            onClick={() => onTabChange(id)}
+            className="flex flex-col items-center gap-0.5 px-4 pt-1 pb-0.5 min-w-[52px]"
+          >
+            {icon(active)}
+            <span className={cn(
+              "font-display text-[9px] uppercase tracking-wider transition-colors leading-none mt-0.5",
+              active ? "text-black" : "text-black/35"
+            )}>
+              {label}
+            </span>
+          </button>
+        );
+      })}
     </div>
   );
 };
 
 const Header = ({ title, scrollY }: { title: string; scrollY: any }) => {
-  const opacity = useTransform(scrollY, [0, 50], [0, 1]);
-  const y = useTransform(scrollY, [0, 50], [20, 0]);
+  const opacity = useTransform(scrollY, [0, 40], [0, 1]);
+  const y = useTransform(scrollY, [0, 40], [10, 0]);
 
   return (
     <>
       {/* Compact Navigation Bar */}
-      <div className="fixed top-0 left-0 right-0 h-[88px] bg-[#F5F5F0]/90 backdrop-blur-md z-40 flex items-end justify-center pb-4 border-b-3 border-black transition-colors duration-200 pointer-events-none">
-        <motion.span 
-          style={{ opacity, y }} 
-          className="font-display text-[18px] text-black uppercase tracking-widest"
+      <div
+        className="fixed top-0 left-0 right-0 bg-[#F5F5F0]/90 backdrop-blur-md z-40 flex items-end justify-center pb-3 border-b-3 border-black pointer-events-none"
+        style={{ paddingTop: 'env(safe-area-inset-top)', height: 'calc(env(safe-area-inset-top) + 52px)' }}
+      >
+        <motion.span
+          style={{ opacity, y }}
+          className="font-display text-[15px] text-black uppercase tracking-widest"
         >
           {title}
         </motion.span>
       </div>
-      
-      {/* Large Title Placeholder */}
-      <div className="pt-[120px] px-6 pb-8 border-b-3 border-black">
-        <h1 className="text-[56px] font-display text-black leading-none tracking-tighter uppercase">{title}</h1>
+
+      {/* Large Title */}
+      <div
+        className="px-4 md:px-6 pb-5 md:pb-8 border-b-3 border-black"
+        style={{ paddingTop: 'calc(env(safe-area-inset-top) + 64px)' }}
+      >
+        <h1 className="text-[38px] md:text-[56px] font-display text-black leading-none tracking-tighter uppercase">{title}</h1>
       </div>
     </>
   );
@@ -603,7 +637,7 @@ const HabitItem: FC<HabitItemProps> = ({ habit, onToggle, onDelete, onEdit }) =>
         onDragEnd={handleDragEnd}
         style={{ x }}
         className={cn(
-          "habit-item p-3 md:p-6 flex flex-col md:flex-row items-start md:items-center justify-between cursor-pointer rounded-none relative z-10 h-full min-h-[100px] md:min-h-0",
+          "habit-item px-4 py-4 md:px-6 md:py-5 flex flex-row items-center justify-between gap-3 cursor-pointer rounded-none relative z-10 min-h-[68px] md:min-h-0",
           habit.completed ? cn("is-active", colorClass) : habit.status === 'skipped' ? "bg-gray-200" : "bg-white"
         )}
         onClick={() => {
@@ -616,27 +650,22 @@ const HabitItem: FC<HabitItemProps> = ({ habit, onToggle, onDelete, onEdit }) =>
           if (navigator.vibrate) navigator.vibrate(50);
         }}
       >
-        {/* Content Layer */}
-        <div className="flex flex-col md:flex-row items-start md:items-center justify-between w-full h-full relative z-10 gap-2 md:gap-0">
-          <span className={cn(
-            "text-base leading-tight md:text-3xl font-serif italic transition-colors duration-300 line-clamp-3 md:line-clamp-none",
-            habit.completed && colorClass !== 'bg-signal-yellow' ? "text-white" : habit.status === 'skipped' ? "text-gray-500 line-through" : "text-black"
-          )}>
-            {habit.title}
-          </span>
+        <span className={cn(
+          "text-lg leading-snug md:text-3xl font-serif italic transition-colors duration-300 flex-1",
+          habit.completed && colorClass !== 'bg-signal-yellow' ? "text-white" : habit.status === 'skipped' ? "text-gray-500 line-through" : "text-black"
+        )}>
+          {habit.title}
+        </span>
 
-          <div className="flex justify-end w-full md:w-auto mt-auto md:mt-0">
-            <div className={cn(
-              "habit-checkbox w-6 h-6 md:w-8 md:h-8 flex items-center justify-center transition-colors duration-300 shrink-0",
-              habit.completed ? "border-black" : habit.status === 'skipped' ? "border-gray-400" : "border-black"
-            )}>
-              {habit.status === 'skipped' ? (
-                <X className="w-4 h-4 md:w-6 md:h-6 text-gray-500" strokeWidth={4} />
-              ) : (
-                <Check className={cn("w-4 h-4 md:w-6 md:h-6 transition-opacity duration-300 check-icon", habit.completed ? "opacity-100" : "opacity-0")} strokeWidth={4} />
-              )}
-            </div>
-          </div>
+        <div className={cn(
+          "habit-checkbox w-7 h-7 md:w-8 md:h-8 flex items-center justify-center transition-colors duration-300 shrink-0",
+          habit.completed ? "border-black" : habit.status === 'skipped' ? "border-gray-400" : "border-black"
+        )}>
+          {habit.status === 'skipped' ? (
+            <X className="w-4 h-4 md:w-5 md:h-5 text-gray-500" strokeWidth={4} />
+          ) : (
+            <Check className={cn("w-4 h-4 md:w-5 md:h-5 transition-opacity duration-300 check-icon", habit.completed ? "opacity-100" : "opacity-0")} strokeWidth={4} />
+          )}
         </div>
       </motion.div>
     </motion.div>
@@ -927,41 +956,56 @@ const TodayScreen = ({ habits, loading, selectedDate, isViewingToday, onPrevDay,
       .catch(e => console.error('Failed to fetch active milestone', e));
   }, []);
 
+  const completedCount = habits.filter((h: Habit) => h.completed).length;
+
   return (
-    <div className="pb-32 min-h-screen bg-[#F5F5F0]">
+    <div className="pb-40 md:pb-32 min-h-screen bg-[#F5F5F0]">
       <Header title={isViewingToday ? 'Today' : format(selectedDate, 'MMM d')} scrollY={scrollY} />
 
-      <div className="px-4 md:px-6 mt-4 md:mt-8">
-        <div className="flex justify-between items-center mb-6 md:mb-10">
-          <div className="flex items-center gap-2">
+      <div className="px-4 md:px-6 mt-4 md:mt-6">
+        {/* Date nav + counter row */}
+        <div className="flex justify-between items-center mb-5 md:mb-10">
+          <div className="flex items-center gap-1.5">
             <button
               onClick={onPrevDay}
-              className="w-8 h-8 flex items-center justify-center border-3 border-black bg-white hover:bg-signal-yellow transition-colors shadow-[2px_2px_0px_#000000] active:translate-y-px active:translate-x-px active:shadow-none"
+              className="w-9 h-9 flex items-center justify-center border-3 border-black bg-white hover:bg-signal-yellow transition-colors shadow-[2px_2px_0px_#000000] active:translate-y-px active:translate-x-px active:shadow-none"
             >
               <ChevronLeft className="w-4 h-4" strokeWidth={3} />
             </button>
-            <span className="text-black font-display text-xs md:text-sm uppercase tracking-widest">
-              {format(selectedDate, 'EEEE, MMM d')}
+            <span className="text-black font-display text-[11px] md:text-sm uppercase tracking-widest px-1">
+              {format(selectedDate, 'EEE, MMM d')}
             </span>
             <button
               onClick={onNextDay}
               disabled={isViewingToday}
-              className="w-8 h-8 flex items-center justify-center border-3 border-black bg-white hover:bg-signal-yellow transition-colors shadow-[2px_2px_0px_#000000] active:translate-y-px active:translate-x-px active:shadow-none disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-white"
+              className="w-9 h-9 flex items-center justify-center border-3 border-black bg-white hover:bg-signal-yellow transition-colors shadow-[2px_2px_0px_#000000] active:translate-y-px active:translate-x-px active:shadow-none disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-white"
             >
               <ChevronRight className="w-4 h-4" strokeWidth={3} />
             </button>
           </div>
-          <span className="text-black font-display text-xs md:text-sm">
-            {habits.filter((h: Habit) => h.completed).length}/{habits.length}
-          </span>
+
+          {/* Progress pill */}
+          <div className="flex items-center gap-2">
+            <span className="text-black font-display text-xs md:text-sm tabular-nums">
+              {completedCount}/{habits.length}
+            </span>
+            {habits.length > 0 && (
+              <div className="hidden sm:block w-20 h-2 border-2 border-black bg-white overflow-hidden">
+                <div
+                  className="h-full bg-black transition-all duration-300"
+                  style={{ width: `${Math.round((completedCount / habits.length) * 100)}%` }}
+                />
+              </div>
+            )}
+          </div>
         </div>
 
         {activeMilestone && (
-          <div className="mb-6 md:mb-8 p-3 md:p-4 border-3 border-black bg-electric-blue text-black shadow-[4px_4px_0px_#000000] flex items-center gap-3 md:gap-4">
-            <div className="text-xl md:text-2xl animate-bounce">📍</div>
-            <div>
-              <div className="font-display text-[8px] md:text-[10px] uppercase tracking-widest opacity-60 mb-1">Current Milestone</div>
-              <div className="font-display text-sm md:text-lg uppercase tracking-tight">{activeMilestone.title}</div>
+          <div className="mb-5 md:mb-8 p-3 border-3 border-black bg-electric-blue text-black shadow-[4px_4px_0px_#000000] flex items-center gap-3">
+            <div className="text-lg shrink-0">📍</div>
+            <div className="min-w-0">
+              <div className="font-display text-[9px] uppercase tracking-widest opacity-60 mb-0.5">Current Milestone</div>
+              <div className="font-display text-sm uppercase tracking-tight truncate">{activeMilestone.title}</div>
             </div>
           </div>
         )}
@@ -977,7 +1021,7 @@ const TodayScreen = ({ habits, loading, selectedDate, isViewingToday, onPrevDay,
             </motion.div>
           </div>
         ) : (
-          <div className="grid grid-cols-2 gap-3 md:grid-cols-1 md:gap-2">
+          <div className="flex flex-col gap-2.5 md:gap-2">
             <AnimatePresence mode='popLayout'>
               {habits.length > 0 ? (
                 habits.map((habit: Habit) => (
@@ -993,13 +1037,13 @@ const TodayScreen = ({ habits, loading, selectedDate, isViewingToday, onPrevDay,
                 <motion.div
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
-                  className="col-span-2 md:col-span-1 py-24 text-center border-3 border-black bg-white shadow-[4px_4px_0px_#000000]"
+                  className="py-20 text-center border-3 border-black bg-white shadow-[4px_4px_0px_#000000]"
                 >
-                  <p className="text-black font-display text-lg uppercase tracking-widest mb-3">
+                  <p className="text-black font-display text-base uppercase tracking-widest mb-3">
                     {isViewingToday ? 'No habits yet' : 'No records for this day'}
                   </p>
-                  <p className="text-black/60 text-lg font-serif italic">
-                    {isViewingToday ? 'Tap the button below to start your journey' : 'Nothing was tracked on this date'}
+                  <p className="text-black/60 font-serif italic">
+                    {isViewingToday ? 'Tap + to start your journey' : 'Nothing was tracked on this date'}
                   </p>
                 </motion.div>
               )}
@@ -1007,13 +1051,24 @@ const TodayScreen = ({ habits, loading, selectedDate, isViewingToday, onPrevDay,
           </div>
         )}
 
+        {/* Desktop add button */}
         <button
           onClick={onAdd}
-          className="mt-10 w-full py-6 border-3 border-black bg-white text-black font-display text-sm uppercase tracking-widest hover:bg-signal-yellow transition-colors flex items-center justify-center gap-3 rounded-none shadow-[4px_4px_0px_#000000] active:translate-y-1 active:translate-x-1 active:shadow-[0px_0px_0px_#000000]"
+          className="hidden md:flex mt-8 w-full py-6 border-3 border-black bg-white text-black font-display text-sm uppercase tracking-widest hover:bg-signal-yellow transition-colors items-center justify-center gap-3 rounded-none shadow-[4px_4px_0px_#000000] active:translate-y-1 active:translate-x-1 active:shadow-[0px_0px_0px_#000000]"
         >
           <Plus className="w-6 h-6" strokeWidth={3} /> Add Habit
         </button>
       </div>
+
+      {/* Floating Add button — mobile only, above tab bar */}
+      <button
+        onClick={onAdd}
+        className="fixed right-4 md:hidden w-14 h-14 bg-black text-white border-3 border-black shadow-[4px_4px_0px_#000000] flex items-center justify-center z-40 active:translate-y-1 active:translate-x-1 active:shadow-none hover:bg-electric-blue transition-colors"
+        style={{ bottom: 'calc(max(5rem, env(safe-area-inset-bottom) + 5rem) + 0.75rem)' }}
+        aria-label="Add Habit"
+      >
+        <Plus className="w-7 h-7" strokeWidth={3} />
+      </button>
     </div>
   );
 };
