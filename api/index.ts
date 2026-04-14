@@ -1,4 +1,4 @@
-import { createApp } from '../src/app.ts';
+import { createApp } from '../src/app.js';
 
 let app: any;
 
