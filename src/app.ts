@@ -383,9 +383,12 @@ export const createApp = async () => {
   });
 
   app.get('/api/stats', requireAuth, async (req: any, res) => {
-    // Heatmap: completions grouped by date (used for streak + calendar)
+    // Heatmap: per-day completed count AND total tracked (for accurate % per day)
     const heatmapResult = await db.query(
-      "SELECT date, COUNT(*) as count FROM completions WHERE user_id = $1 AND status = 'completed' GROUP BY date",
+      `SELECT date,
+         CAST(SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) AS INTEGER) as count,
+         CAST(COUNT(*) AS INTEGER) as total
+       FROM completions WHERE user_id = $1 GROUP BY date`,
       [req.user.id]
     );
 
@@ -437,8 +440,10 @@ export const createApp = async () => {
     const totalRecords = parseInt(totalRecordsResult.rows[0]?.count || '0');
     const completionRate = totalRecords > 0 ? Math.round((totalCompleted / totalRecords) * 100) : 0;
 
-    // Calculate current streak
-    const datesWithCompletions = heatmapResult.rows.map((r: any) => r.date).sort().reverse();
+    // Calculate current streak (only days with at least one completed habit)
+    const datesWithCompletions = heatmapResult.rows
+      .filter((r: any) => parseInt(r.count) > 0)
+      .map((r: any) => r.date).sort().reverse();
     let currentStreak = 0;
 
     const now = new Date();
@@ -551,7 +556,10 @@ export const createApp = async () => {
         }
 
         if (habitId) {
-          const newStatus = item.completed !== false ? 'completed' : 'skipped';
+          // Prefer explicit status field; fall back to completed boolean
+          const newStatus: string = item.status === 'skipped' ? 'skipped'
+            : item.status === 'completed' ? 'completed'
+            : item.completed !== false ? 'completed' : 'skipped';
           const checkResult = await db.query(
             'SELECT id, status FROM completions WHERE habit_id = $1 AND date = $2 AND user_id = $3',
             [habitId, item.date, req.user.id]
@@ -574,6 +582,28 @@ export const createApp = async () => {
     } catch (error) {
       console.error('Import error:', error);
       res.status(500).json({ error: 'Failed to import data' });
+    }
+  });
+
+  // Day detail: all completions for a specific date (including archived habits)
+  app.get('/api/completions/:date', requireAuth, async (req: any, res) => {
+    const { date } = req.params;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      return res.status(400).json({ error: 'Invalid date format' });
+    }
+    try {
+      const result = await db.query(
+        `SELECT h.title, c.status
+         FROM completions c
+         JOIN habits h ON c.habit_id = h.id
+         WHERE c.date = $1 AND c.user_id = $2
+         ORDER BY c.status DESC, h.title ASC`,
+        [date, req.user.id]
+      );
+      res.json(result.rows);
+    } catch (err) {
+      console.error('GET /api/completions/:date error:', err);
+      res.status(500).json({ error: 'Failed to fetch completions' });
     }
   });
 

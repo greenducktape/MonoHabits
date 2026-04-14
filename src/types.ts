@@ -8,7 +8,7 @@ export interface Habit {
 }
 
 export interface StatData {
-  heatmap: { date: string; count: number }[];
+  heatmap: { date: string; count: number; total: number }[];
   totalHabits: number;
   activeHabitsPerMonth?: { month: string; count: number }[];
   completionRate?: number;

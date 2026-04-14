@@ -746,14 +746,85 @@ const AddHabitModal = ({ isOpen, onClose, onSave, onDelete, onSkip, initialHabit
   );
 };
 
+// --- Day Detail Modal ---
+
+const DayDetailModal = ({ date, onClose }: { date: string; onClose: () => void }) => {
+  const [completions, setCompletions] = useState<{ title: string; status: string }[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    setLoading(true);
+    apiFetch(`/api/completions/${date}`)
+      .then(res => res.json())
+      .then(data => setCompletions(Array.isArray(data) ? data : []))
+      .catch(() => setCompletions([]))
+      .finally(() => setLoading(false));
+  }, [date]);
+
+  const completedCount = completions.filter(c => c.status === 'completed').length;
+
+  return (
+    <div className="fixed inset-0 z-[100] flex items-end sm:items-center justify-center bg-[#F5F5F0]/90 backdrop-blur-sm p-4">
+      <motion.div
+        initial={{ y: 40, opacity: 0 }}
+        animate={{ y: 0, opacity: 1 }}
+        exit={{ y: 40, opacity: 0 }}
+        className="w-full max-w-sm bg-white border-3 border-black shadow-[8px_8px_0px_#000000] rounded-none"
+      >
+        <div className="flex justify-between items-start p-4 border-b-3 border-black">
+          <div>
+            <div className="font-display text-[9px] uppercase tracking-widest text-black/50 mb-0.5">Day Summary</div>
+            <div className="font-display text-base uppercase tracking-tighter">
+              {format(parseISO(date), 'EEEE, MMM d yyyy')}
+            </div>
+          </div>
+          <div className="flex items-center gap-3 mt-0.5">
+            {completions.length > 0 && (
+              <span className="font-display text-sm tabular-nums">{completedCount}/{completions.length}</span>
+            )}
+            <button onClick={onClose} className="p-1 hover:text-bold-red transition-colors">
+              <X className="w-5 h-5" strokeWidth={3} />
+            </button>
+          </div>
+        </div>
+
+        <div className="p-4 max-h-72 overflow-y-auto">
+          {loading ? (
+            <div className="text-center py-8 font-display text-[10px] uppercase tracking-widest text-black/40">Loading...</div>
+          ) : completions.length === 0 ? (
+            <div className="text-center py-8 font-serif italic text-black/40">No habits tracked</div>
+          ) : (
+            <div className="flex flex-col gap-1.5">
+              {completions.map((c, i) => (
+                <div key={i} className={cn(
+                  "flex items-center justify-between px-3 py-2.5 border-2 border-black gap-3",
+                  c.status === 'completed' ? "bg-racing-green" : "bg-gray-100"
+                )}>
+                  <span className={cn(
+                    "font-serif italic text-sm flex-1",
+                    c.status === 'completed' ? "text-white" : "text-gray-400 line-through"
+                  )}>{c.title}</span>
+                  {c.status === 'completed'
+                    ? <Check className="w-4 h-4 text-white shrink-0" strokeWidth={3} />
+                    : <X className="w-4 h-4 text-gray-400 shrink-0" strokeWidth={3} />}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </motion.div>
+    </div>
+  );
+};
+
 // --- Visualization Components ---
 
-const WeeklyView = ({ data }: { data: StatData }) => {
+const WeeklyView = ({ data, onDayClick }: { data: StatData; onDayClick: (date: string) => void }) => {
   const { paletteId } = useContext(PaletteContext);
   const palette = PALETTES[paletteId]?.colors || PALETTES['traffic'].colors;
 
   const today = new Date();
-  const start = startOfWeek(today, { weekStartsOn: 1 }); // Monday start
+  const start = startOfWeek(today, { weekStartsOn: 1 });
   const end = endOfWeek(today, { weekStartsOn: 1 });
   const days = eachDayOfInterval({ start, end });
 
@@ -767,31 +838,31 @@ const WeeklyView = ({ data }: { data: StatData }) => {
 
   return (
     <div className="w-full h-64 flex items-end justify-between gap-3 pt-8">
-      {days.map((day, index) => {
+      {days.map((day) => {
         const dateStr = format(day, 'yyyy-MM-dd');
-        const monthStr = dateStr.substring(0, 7);
-        const activeThisMonth = data.activeHabitsPerMonth?.find(m => m.month === monthStr)?.count;
-        const maxHabits = activeThisMonth || data.totalHabits || 1;
-
         const dayData = data.heatmap.find(d => d.date === dateStr);
-        const count = dayData ? dayData.count : 0;
-        const height = Math.max((count / maxHabits) * 100, 5); // Min 5% height
-        const percentage = count / maxHabits;
+        const count = dayData?.count ?? 0;
+        const total = dayData?.total ?? 0;
+        const percentage = total > 0 ? count / total : 0;
+        const height = total > 0 ? Math.max(percentage * 100, 5) : 3;
         const colorClass = getColorClass(percentage);
 
         return (
-          <div key={dateStr} className="flex flex-col items-center gap-4 flex-1">
+          <div
+            key={dateStr}
+            className="flex flex-col items-center gap-4 flex-1 cursor-pointer"
+            onClick={() => total > 0 && onDayClick(dateStr)}
+          >
             <div className="w-full bg-[#F5F5F0] border-3 border-black rounded-none relative h-40 flex items-end overflow-hidden group">
-               <motion.div 
-                 initial={{ height: 0 }}
-                 animate={{ height: `${height}%` }}
-                 transition={{ duration: 0.5, ease: "easeOut" }}
-                 className={cn("w-full border-t-3 border-black relative", colorClass)}
-               >
-               </motion.div>
-               <div className="absolute bottom-2 w-full text-center text-xs font-display text-black opacity-0 group-hover:opacity-100 transition-opacity z-10 bg-white/80 py-1">
-                 {count}
-               </div>
+              <motion.div
+                initial={{ height: 0 }}
+                animate={{ height: `${height}%` }}
+                transition={{ duration: 0.5, ease: "easeOut" }}
+                className={cn("w-full border-t-3 border-black", colorClass)}
+              />
+              <div className="absolute bottom-2 w-full text-center text-[10px] font-display text-black opacity-0 group-hover:opacity-100 transition-opacity z-10 bg-white/80 py-1">
+                {total > 0 ? `${count}/${total}` : '—'}
+              </div>
             </div>
             <span className="text-black font-display text-[10px] uppercase tracking-widest">
               {format(day, 'EEE')}
@@ -803,7 +874,7 @@ const WeeklyView = ({ data }: { data: StatData }) => {
   );
 };
 
-const MonthlyView = ({ data }: { data: StatData }) => {
+const MonthlyView = ({ data, onDayClick }: { data: StatData; onDayClick: (date: string) => void }) => {
   const { paletteId } = useContext(PaletteContext);
   const palette = PALETTES[paletteId]?.colors || PALETTES['traffic'].colors;
   const [currentMonth, setCurrentMonth] = useState(new Date());
@@ -839,33 +910,31 @@ const MonthlyView = ({ data }: { data: StatData }) => {
       </div>
 
       <div className="grid grid-cols-7 gap-2">
-        {days.map((day, index) => {
+        {days.map((day) => {
           const dateStr = format(day, 'yyyy-MM-dd');
-          const monthStr = dateStr.substring(0, 7);
-          const activeThisMonth = data.activeHabitsPerMonth?.find(m => m.month === monthStr)?.count;
-          const total = activeThisMonth || data.totalHabits || 1;
-
           const dayData = data.heatmap.find(d => d.date === dateStr);
-          const count = dayData ? dayData.count : 0;
-          const percentage = count / total;
-          
+          const count = dayData?.count ?? 0;
+          const total = dayData?.total ?? 0;
+          const percentage = total > 0 ? count / total : 0;
           const isCurrentMonth = isSameMonth(day, currentMonth);
           const isToday = isSameDay(day, new Date());
           const colorClass = getColorClass(percentage);
-          
+
           return (
-            <div 
-              key={dateStr} 
+            <div
+              key={dateStr}
+              onClick={() => isCurrentMonth && total > 0 && onDayClick(dateStr)}
+              title={total > 0 ? `${count}/${total} habits` : undefined}
               className={cn(
-                "aspect-square flex items-center justify-center text-[12px] font-serif italic relative group transition-all duration-300 rounded-none overflow-hidden border-2",
-                !isCurrentMonth && "opacity-20",
+                "aspect-square flex items-center justify-center text-[12px] font-serif italic relative transition-all duration-300 rounded-none overflow-hidden border-2",
+                !isCurrentMonth ? "opacity-20" : total > 0 ? "cursor-pointer hover:opacity-80" : "",
                 isToday ? "border-black" : "border-transparent",
                 colorClass
               )}
             >
               <span className={cn(
                 "relative z-20",
-                count > 0 && colorClass !== 'bg-signal-yellow' ? "text-white font-sans font-bold" : "text-black"
+                count > 0 && colorClass !== 'bg-signal-yellow' ? "text-white font-sans font-bold text-[11px]" : "text-black"
               )}>
                 {format(day, 'd')}
               </span>
@@ -877,19 +946,16 @@ const MonthlyView = ({ data }: { data: StatData }) => {
   );
 };
 
-const YearlyView = ({ data }: { data: StatData }) => {
+const YearlyView = ({ data, onDayClick }: { data: StatData; onDayClick: (date: string) => void }) => {
   const { paletteId } = useContext(PaletteContext);
   const palette = PALETTES[paletteId]?.colors || PALETTES['traffic'].colors;
 
-  // Generate full current year
   const currentYear = new Date().getFullYear();
   const start = startOfYear(new Date(currentYear, 0, 1));
   const end = endOfYear(new Date(currentYear, 0, 1));
   const days = eachDayOfInterval({ start, end });
 
-  // Calculate padding days for the start of the year to align Mon-Sun grid
-  // Mon=0, Tue=1, Wed=2, Thu=3...
-  const startDay = (getDay(start) + 6) % 7; // Convert Sun=0 to Mon=0 scale
+  const startDay = (getDay(start) + 6) % 7;
   const paddingDays = Array.from({ length: startDay });
 
   const getColorClass = (percentage: number) => {
@@ -904,30 +970,30 @@ const YearlyView = ({ data }: { data: StatData }) => {
     <div className="w-full overflow-x-auto pb-4">
       <div className="flex gap-1" style={{ width: 'max-content' }}>
         <div className="grid grid-rows-7 grid-flow-col gap-1.5">
-           {/* Padding for correct day alignment */}
-           {paddingDays.map((_, i) => (
-             <div key={`pad-${i}`} className="w-4 h-4 bg-transparent" />
-           ))}
+          {paddingDays.map((_, i) => (
+            <div key={`pad-${i}`} className="w-4 h-4 bg-transparent" />
+          ))}
+          {days.map((day) => {
+            const dateStr = format(day, 'yyyy-MM-dd');
+            const dayData = data.heatmap.find(d => d.date === dateStr);
+            const count = dayData?.count ?? 0;
+            const total = dayData?.total ?? 0;
+            const percentage = total > 0 ? count / total : 0;
+            const colorClass = getColorClass(percentage);
 
-           {days.map((day) => {
-             const dateStr = format(day, 'yyyy-MM-dd');
-             const monthStr = dateStr.substring(0, 7);
-             const activeThisMonth = data.activeHabitsPerMonth?.find(m => m.month === monthStr)?.count;
-             const total = activeThisMonth || data.totalHabits || 1;
-
-             const dayData = data.heatmap.find(d => d.date === dateStr);
-             const count = dayData ? dayData.count : 0;
-             const percentage = count / total;
-             const colorClass = getColorClass(percentage);
-             
-             return (
-               <div
-                 key={dateStr}
-                 className={cn("w-4 h-4 rounded-none relative overflow-hidden border border-black/5", colorClass)}
-                 title={`${dateStr}: ${count}`}
-               />
-             );
-           })}
+            return (
+              <div
+                key={dateStr}
+                onClick={() => total > 0 && onDayClick(dateStr)}
+                title={total > 0 ? `${dateStr}: ${count}/${total}` : dateStr}
+                className={cn(
+                  "w-4 h-4 rounded-none border border-black/5",
+                  total > 0 ? "cursor-pointer hover:opacity-75" : "",
+                  colorClass
+                )}
+              />
+            );
+          })}
         </div>
       </div>
       <div className="mt-4 flex justify-between text-black font-display text-[10px] uppercase tracking-widest sticky left-0">
@@ -1077,6 +1143,7 @@ const TrendsScreen = () => {
   const { scrollY } = useScroll();
   const [stats, setStats] = useState<StatData | null>(null);
   const [view, setView] = useState<'weekly' | 'monthly' | 'yearly'>('weekly');
+  const [selectedDay, setSelectedDay] = useState<string | null>(null);
 
   useEffect(() => {
     apiFetch('/api/stats')
@@ -1101,10 +1168,10 @@ const TrendsScreen = () => {
   return (
     <div className="pb-32 min-h-screen bg-[#F5F5F0]">
       <Header title="Trends" scrollY={scrollY} />
-      
-      <div className="px-6 mt-8">
+
+      <div className="px-4 md:px-6 mt-6 md:mt-8">
         {/* View Selector */}
-        <div className="flex p-1 bg-white mb-10 rounded-none border-3 border-black shadow-[4px_4px_0px_#000000]">
+        <div className="flex p-1 bg-white mb-6 md:mb-10 rounded-none border-3 border-black shadow-[4px_4px_0px_#000000]">
           {['weekly', 'monthly', 'yearly'].map((v) => (
             <button
               key={v}
@@ -1119,34 +1186,43 @@ const TrendsScreen = () => {
           ))}
         </div>
 
-        <div className="border-3 border-black bg-white p-8 mb-8 min-h-[300px] rounded-none shadow-[4px_4px_0px_#000000]">
-          <h3 className="text-black font-display text-2xl mb-8 uppercase tracking-tighter">{view} Overview</h3>
+        <div className="border-3 border-black bg-white p-5 md:p-8 mb-6 md:mb-8 min-h-[260px] rounded-none shadow-[4px_4px_0px_#000000]">
+          <div className="flex items-baseline justify-between mb-6 md:mb-8">
+            <h3 className="text-black font-display text-xl md:text-2xl uppercase tracking-tighter">{view} Overview</h3>
+            <span className="text-black/40 font-display text-[9px] uppercase tracking-widest">Tap a day for details</span>
+          </div>
           {stats ? (
             <>
-              {view === 'weekly' && <WeeklyView data={stats} />}
-              {view === 'monthly' && <MonthlyView data={stats} />}
-              {view === 'yearly' && <YearlyView data={stats} />}
+              {view === 'weekly' && <WeeklyView data={stats} onDayClick={setSelectedDay} />}
+              {view === 'monthly' && <MonthlyView data={stats} onDayClick={setSelectedDay} />}
+              {view === 'yearly' && <YearlyView data={stats} onDayClick={setSelectedDay} />}
             </>
           ) : (
             <div className="text-black/50 font-sans text-sm">Loading stats...</div>
           )}
         </div>
 
-        <div className="grid grid-cols-2 gap-6">
-          <div className="border-3 border-black bg-white p-6 rounded-none shadow-[4px_4px_0px_#000000]">
-            <div className="text-black/50 font-display text-[10px] uppercase mb-3 tracking-widest">Current Streak</div>
-            <div className="text-5xl font-serif italic text-black">
+        <div className="grid grid-cols-2 gap-4 md:gap-6">
+          <div className="border-3 border-black bg-white p-5 md:p-6 rounded-none shadow-[4px_4px_0px_#000000]">
+            <div className="text-black/50 font-display text-[10px] uppercase mb-2 tracking-widest">Current Streak</div>
+            <div className="text-4xl md:text-5xl font-serif italic text-black">
               {stats?.currentStreak ?? 0}
             </div>
           </div>
-          <div className="border-3 border-black bg-white p-6 rounded-none shadow-[4px_4px_0px_#000000]">
-            <div className="text-black/50 font-display text-[10px] uppercase mb-3 tracking-widest">Completion Rate</div>
-            <div className="text-5xl font-serif italic text-black">
-               {stats?.completionRate ?? 0}%
+          <div className="border-3 border-black bg-white p-5 md:p-6 rounded-none shadow-[4px_4px_0px_#000000]">
+            <div className="text-black/50 font-display text-[10px] uppercase mb-2 tracking-widest">Completion Rate</div>
+            <div className="text-4xl md:text-5xl font-serif italic text-black">
+              {stats?.completionRate ?? 0}%
             </div>
           </div>
         </div>
       </div>
+
+      <AnimatePresence>
+        {selectedDay && (
+          <DayDetailModal date={selectedDay} onClose={() => setSelectedDay(null)} />
+        )}
+      </AnimatePresence>
     </div>
   );
 };
@@ -1299,19 +1375,16 @@ const SettingsScreen = ({ onHabitRestored }: { onHabitRestored: () => void }) =>
                }
             } catch (e) { return null; }
 
-            // Parse completed status
-            let completed = true;
-            if (completedKey) {
-              const val = String(row[completedKey]).toLowerCase().trim();
-              if (val === 'false' || val === '0' || val === 'no' || val === 'incomplete') {
-                completed = false;
-              }
-            }
+            // Parse status — support 'completed'/'skipped' explicitly, plus true/false/yes/no
+            const rawStatus = completedKey ? String(row[completedKey]).toLowerCase().trim() : 'completed';
+            const status = (rawStatus === 'completed' || rawStatus === 'true' || rawStatus === '1' || rawStatus === 'yes')
+              ? 'completed' : 'skipped';
 
             return {
               date: dateStr,
               title: row[titleKey],
-              completed
+              completed: status === 'completed',
+              status
             };
           }).filter(Boolean);
 
