@@ -121,9 +121,20 @@ class PostgresAdapter {
   async init() {
     try {
       const { Pool } = await import('pg');
+      const rawUrl = process.env.POSTGRES_URL ?? '';
+      // Strip sslmode from the URL — newer pg treats sslmode=require as
+      // verify-full (full cert check) which overrides rejectUnauthorized.
+      // Removing it lets the pool's ssl option take full control.
+      let connStr = rawUrl;
+      try {
+        const u = new URL(rawUrl);
+        u.searchParams.delete('sslmode');
+        connStr = u.toString();
+      } catch { /* leave connStr as rawUrl if URL parsing fails */ }
+
       this.pool = new Pool({
-        connectionString: process.env.POSTGRES_URL,
-        ssl: process.env.POSTGRES_URL?.includes('localhost') ? false : { rejectUnauthorized: false }
+        connectionString: connStr,
+        ssl: rawUrl.includes('localhost') ? false : { rejectUnauthorized: false }
       });
 
       // Initialize Database Schema
