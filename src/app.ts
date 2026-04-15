@@ -443,19 +443,30 @@ export const createApp = async () => {
     // The completions table only records habits you explicitly touched, so using
     // COUNT(*) from completions gives total=completed on days you only marked some
     // habits, making every day look like 100%.
+    // Count of currently active habits (used as fallback denominator)
+    const activeHabitCount = habitsResult.rows.filter((h: any) =>
+      h.archived !== 1 && h.archived !== true && h.archived !== '1'
+    ).length;
+
     const heatmapWithTotal = heatmapResult.rows.map((row: any) => {
       const dateStr: string = String(row.date).slice(0, 10);
-      // Only count non-archived habits — we don't track archived_at, so archived
-      // habits would inflate the denominator for all past days.
-      const habitsOnDate = habitsResult.rows.filter((h: any) => {
-        if (h.archived) return false;
-        const created = h.created_at ? new Date(h.created_at).toISOString().slice(0, 10) : null;
-        return created && created <= dateStr;
-      }).length;
+      let habitsOnDate = 0;
+      for (const h of habitsResult.rows) {
+        // Normalise archived: pg may return integer, boolean, or string
+        const isArchived = h.archived === 1 || h.archived === true || h.archived === '1';
+        if (isArchived) continue;
+        if (!h.created_at) continue;
+        try {
+          const createdStr = new Date(h.created_at).toISOString().slice(0, 10);
+          if (createdStr <= dateStr) habitsOnDate++;
+        } catch { /* skip malformed date */ }
+      }
       return {
         date: row.date,
         count: Number(row.count),
-        total: habitsOnDate > 0 ? habitsOnDate : Number(row.total),
+        // Use the per-day habit count; fall back to current active count if
+        // something goes wrong (never fall back to the completions-table count)
+        total: habitsOnDate > 0 ? habitsOnDate : activeHabitCount,
       };
     });
 
@@ -655,12 +666,13 @@ export const createApp = async () => {
       return res.status(400).json({ error: 'Invalid date format' });
     }
     try {
+      // LEFT JOIN so habits with no completion record on this date appear as 'pending'
       const result = await db.query(
-        `SELECT h.title, c.status
-         FROM completions c
-         JOIN habits h ON c.habit_id = h.id
-         WHERE c.date = $1 AND c.user_id = $2
-         ORDER BY c.status DESC, h.title ASC`,
+        `SELECT h.title, COALESCE(c.status, 'pending') as status
+         FROM habits h
+         LEFT JOIN completions c ON c.habit_id = h.id AND c.date = $1 AND c.user_id = $2
+         WHERE h.user_id = $2 AND h.archived = 0
+         ORDER BY h.title ASC`,
         [date, req.user.id]
       );
       res.json(result.rows);
