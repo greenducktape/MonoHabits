@@ -783,19 +783,23 @@ const AddHabitModal = ({ isOpen, onClose, onSave, onDelete, onSkip, initialHabit
 
 const DayDetailModal = ({ date, onClose }: { date: string; onClose: () => void }) => {
   const [completions, setCompletions] = useState<{ title: string; status: string }[]>([]);
+  const [monthTotal, setMonthTotal] = useState(0);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     setLoading(true);
     apiFetch(`/api/completions/${date}`)
       .then(res => res.json())
-      .then(data => setCompletions(Array.isArray(data) ? data : []))
+      .then(data => {
+        setCompletions(Array.isArray(data.completions) ? data.completions : []);
+        setMonthTotal(data.monthTotal ?? 0);
+      })
       .catch(() => setCompletions([]))
       .finally(() => setLoading(false));
   }, [date]);
 
   const completedCount = completions.filter(c => c.status === 'completed').length;
-  const totalCount = completions.length;
+  const totalCount = monthTotal || completions.length;
 
   return (
     <div className="fixed inset-0 z-[100] flex items-end sm:items-center justify-center bg-[#F5F5F0]/90 backdrop-blur-sm p-4">
@@ -825,24 +829,22 @@ const DayDetailModal = ({ date, onClose }: { date: string; onClose: () => void }
         <div className="p-4 max-h-72 overflow-y-auto">
           {loading ? (
             <div className="text-center py-8 font-display text-[10px] uppercase tracking-widest text-black/40">Loading...</div>
-          ) : totalCount === 0 ? (
+          ) : completions.length === 0 ? (
             <div className="text-center py-8 font-serif italic text-black/40">No habits tracked</div>
           ) : (
             <div className="flex flex-col gap-1.5">
               {completions.map((c, i) => (
                 <div key={i} className={cn(
                   "flex items-center justify-between px-3 py-2.5 border-2 border-black gap-3",
-                  c.status === 'completed' ? "bg-racing-green" : c.status === 'skipped' ? "bg-gray-100" : "bg-white"
+                  c.status === 'completed' ? "bg-racing-green" : "bg-gray-100"
                 )}>
                   <span className={cn(
                     "font-serif italic text-sm flex-1",
-                    c.status === 'completed' ? "text-white" : c.status === 'skipped' ? "text-gray-400 line-through" : "text-black/40"
+                    c.status === 'completed' ? "text-white" : "text-gray-400 line-through"
                   )}>{c.title}</span>
                   {c.status === 'completed'
                     ? <Check className="w-4 h-4 text-white shrink-0" strokeWidth={3} />
-                    : c.status === 'skipped'
-                    ? <X className="w-4 h-4 text-gray-400 shrink-0" strokeWidth={3} />
-                    : <div className="w-4 h-4 border-2 border-black/20 shrink-0" />}
+                    : <X className="w-4 h-4 text-gray-400 shrink-0" strokeWidth={3} />}
                 </div>
               ))}
             </div>
