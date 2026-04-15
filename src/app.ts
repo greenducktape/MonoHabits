@@ -381,7 +381,7 @@ export const createApp = async () => {
 
   app.get('/api/stats', requireAuth, async (req: any, res) => {
     // Run all independent queries in parallel
-    const [heatmapResult, habitsResult, lastCompletionResult, aggregatesResult] = await Promise.all([
+    const [heatmapResult, habitsResult, lastCompletionResult, aggregatesResult, habitsPerMonthResult] = await Promise.all([
       // Per-day completed count (heatmap data)
       db.query(
         `SELECT date,
@@ -390,9 +390,9 @@ export const createApp = async () => {
          FROM completions WHERE user_id = $1 GROUP BY date`,
         [req.user.id]
       ),
-      // All habits for denominator calculation
+      // Non-archived habits (for current-month fallback denominator)
       db.query(
-        'SELECT id, created_at, archived, archived_at FROM habits WHERE user_id = $1',
+        'SELECT id, created_at FROM habits WHERE user_id = $1 AND archived = 0',
         [req.user.id]
       ),
       // Last completion date per habit (for active habit detection)
@@ -407,6 +407,14 @@ export const createApp = async () => {
            CAST(SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) AS INTEGER) as total_completed,
            CAST(COUNT(*) AS INTEGER) as total_records
          FROM completions WHERE user_id = $1`,
+        [req.user.id]
+      ),
+      // Distinct habits tracked per calendar month — used as the denominator.
+      // This is the ground truth: if 7 habits appeared in March, the denominator
+      // for every March day is 7, regardless of what's archived or created when.
+      db.query(
+        `SELECT SUBSTR(date, 1, 7) as month, COUNT(DISTINCT habit_id) as count
+         FROM completions WHERE user_id = $1 GROUP BY SUBSTR(date, 1, 7)`,
         [req.user.id]
       ),
     ]);
@@ -436,32 +444,33 @@ export const createApp = async () => {
     // The completions table only records habits you explicitly touched, so using
     // COUNT(*) from completions gives total=completed on days you only marked some
     // habits, making every day look like 100%.
-    // Count of currently active habits (fallback denominator)
-    const activeHabitCount = habitsResult.rows.filter((h: any) =>
-      h.archived !== 1 && h.archived !== true && h.archived !== '1'
-    ).length;
+    // Current active habit count — used as floor for the current month so that
+    // habits not yet logged this month still count toward the denominator.
+    const currentMonth = new Date().toISOString().slice(0, 7);
+    const activeHabitCount = habitsResult.rows.filter((h: any) => {
+      try {
+        const created = new Date(h.created_at).toISOString().slice(0, 10);
+        return created <= currentMonth + '-01';
+      } catch { return true; }
+    }).length || habitsResult.rows.length;
+
+    // Build month → distinct-habit-count map from actual completions data.
+    // This is the most reliable denominator: it tells us exactly how many habits
+    // were being tracked each calendar month, regardless of created_at/archived_at.
+    const monthCountMap = new Map<string, number>(
+      habitsPerMonthResult.rows.map((r: any) => [String(r.month), Number(r.count)])
+    );
 
     const heatmapWithTotal = heatmapResult.rows.map((row: any) => {
       const dateStr: string = String(row.date).slice(0, 10);
-      let habitsOnDate = 0;
-      for (const h of habitsResult.rows) {
-        try {
-          const createdStr = new Date(h.created_at).toISOString().slice(0, 10);
-          if (createdStr > dateStr) continue; // created after this date
-          // Habit was active on dateStr if it had not yet been archived
-          // archived_at is either NULL (still active) or the date it was archived
-          if (h.archived_at) {
-            const archivedStr = new Date(h.archived_at).toISOString().slice(0, 10);
-            if (archivedStr < dateStr) continue; // already archived before this date
-          }
-          habitsOnDate++;
-        } catch { /* skip malformed dates */ }
-      }
-      return {
-        date: row.date,
-        count: Number(row.count),
-        total: habitsOnDate > 0 ? habitsOnDate : activeHabitCount,
-      };
+      const month = dateStr.slice(0, 7);
+      const monthCount = monthCountMap.get(month) ?? 0;
+      // For the current month, some active habits may not have any completions yet,
+      // so use the larger of the two to avoid undercounting.
+      const total = month === currentMonth
+        ? Math.max(monthCount, activeHabitCount)
+        : monthCount || activeHabitCount;
+      return { date: row.date, count: Number(row.count), total };
     });
 
     const completionRate = totalRecords > 0 ? Math.round((totalCompleted / totalRecords) * 100) : 0;
