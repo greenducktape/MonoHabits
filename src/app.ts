@@ -392,8 +392,10 @@ export const createApp = async () => {
       [req.user.id]
     );
 
+    // Fetch ALL habits (incl. archived) so we can compute the correct denominator per day.
+    // A habit counts toward a day's total if it was created on or before that date.
     const habitsResult = await db.query(
-      'SELECT id, created_at FROM habits WHERE archived = 0 AND user_id = $1',
+      'SELECT id, created_at, archived FROM habits WHERE user_id = $1',
       [req.user.id]
     );
     const maxDateResult = await db.query(
@@ -430,11 +432,29 @@ export const createApp = async () => {
     }
 
     const activeHabitsCount = habitsResult.rows.filter((h: any) => {
+      if (h.archived) return false;
       if (!thresholdDateStr) return true;
       const lastDate = lastCompletionMap.get(h.id);
       if (!lastDate) return true;
       return lastDate >= thresholdDateStr;
     }).length;
+
+    // Fix heatmap denominator: total for a day = habits that existed on that date.
+    // The completions table only records habits you explicitly touched, so using
+    // COUNT(*) from completions gives total=completed on days you only marked some
+    // habits, making every day look like 100%.
+    const heatmapWithTotal = heatmapResult.rows.map((row: any) => {
+      const dateStr: string = String(row.date).slice(0, 10);
+      const habitsOnDate = habitsResult.rows.filter((h: any) => {
+        const created = h.created_at ? String(h.created_at).slice(0, 10) : null;
+        return created && created <= dateStr;
+      }).length;
+      return {
+        date: row.date,
+        count: Number(row.count),
+        total: habitsOnDate || Number(row.total), // fallback to DB total if no habits found
+      };
+    });
 
     const totalCompleted = parseInt(totalCompletedResult.rows[0]?.count || '0');
     const totalRecords = parseInt(totalRecordsResult.rows[0]?.count || '0');
@@ -467,7 +487,7 @@ export const createApp = async () => {
     }
 
     res.json({
-      heatmap: heatmapResult.rows,
+      heatmap: heatmapWithTotal,
       totalHabits: activeHabitsCount,
       activeHabitsPerMonth: activeHabitsPerMonthResult.rows,
       completionRate,
