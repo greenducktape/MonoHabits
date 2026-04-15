@@ -1537,25 +1537,50 @@ const SettingsScreen = ({ onHabitRestored }: { onHabitRestored: () => void }) =>
         </div>
 
         <div className="mt-12">
+          <h4 className="text-black font-display text-sm uppercase tracking-widest mb-6">Export Data</h4>
+
+          <div className="bg-white border-3 border-black p-6 mb-10 rounded-none shadow-[4px_4px_0px_#000000]">
+            <p className="text-black/70 text-base mb-6 font-serif italic">
+              Download all your habit history as a CSV file. You can reimport it later or open it in any spreadsheet app.
+            </p>
+            <button
+              onClick={async () => {
+                const res = await apiFetch('/api/export');
+                if (!res.ok) return;
+                const blob = await res.blob();
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                const today = new Date().toISOString().slice(0, 10);
+                a.download = `monohabit_export_${today}.csv`;
+                a.click();
+                URL.revokeObjectURL(url);
+              }}
+              className="w-full py-4 bg-black text-white font-display text-xs uppercase tracking-widest hover:bg-racing-green transition-colors flex items-center justify-center gap-3 rounded-none shadow-[4px_4px_0px_#000000] active:translate-y-1 active:translate-x-1 active:shadow-[0px_0px_0px_#000000]"
+            >
+              <Download className="w-5 h-5" strokeWidth={3} /> Export CSV
+            </button>
+          </div>
+
           <h4 className="text-black font-display text-sm uppercase tracking-widest mb-6">Import Data</h4>
-          
+
           <div className="bg-white border-3 border-black p-6 mb-6 rounded-none shadow-[4px_4px_0px_#000000]">
             <p className="text-black/70 text-base mb-6 font-serif italic">
-              Import your history from a CSV file. The file should have columns for 
-              <span className="text-black font-display not-italic mx-1">Date</span> and 
+              Import your history from a CSV file. The file should have columns for
+              <span className="text-black font-display not-italic mx-1">Date</span> and
               <span className="text-black font-display not-italic mx-1">Habit Title</span>.
-              Optionally add a <span className="text-black font-display not-italic mx-1">Completed</span> column (TRUE/FALSE) to explicitly mark items as incomplete.
+              Optionally add a <span className="text-black font-display not-italic mx-1">Status</span> column (completed/skipped).
             </p>
-            
+
             <div className="flex gap-4">
-              <button 
+              <button
                 onClick={() => fileInputRef.current?.click()}
                 disabled={importing}
                 className="flex-1 py-4 bg-black text-white font-display text-xs uppercase tracking-widest hover:bg-electric-blue transition-colors flex items-center justify-center gap-3 rounded-none shadow-[4px_4px_0px_#000000] active:translate-y-1 active:translate-x-1 active:shadow-[0px_0px_0px_#000000]"
               >
                 {importing ? 'Importing...' : <><Upload className="w-5 h-5" strokeWidth={3} /> Select CSV</>}
               </button>
-              <button 
+              <button
                 onClick={downloadTemplate}
                 className="px-6 py-4 border-3 border-black text-black hover:bg-signal-yellow transition-colors rounded-none shadow-[4px_4px_0px_#000000] active:translate-y-1 active:translate-x-1 active:shadow-[0px_0px_0px_#000000]"
                 title="Download Template"

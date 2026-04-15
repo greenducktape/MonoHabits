@@ -522,6 +522,33 @@ export const createApp = async () => {
     res.json({ success: true });
   });
 
+  app.get('/api/export', requireAuth, async (req: any, res) => {
+    try {
+      const result = await db.query(
+        `SELECT h.title, c.date, c.status
+         FROM completions c
+         JOIN habits h ON c.habit_id = h.id
+         WHERE c.user_id = $1
+         ORDER BY c.date DESC, h.title ASC`,
+        [req.user.id]
+      );
+
+      const today = new Date().toISOString().slice(0, 10);
+      const lines = ['Habit Title,Date,Status'];
+      for (const row of result.rows) {
+        const title = String(row.title).replace(/"/g, '""');
+        lines.push(`"${title}",${row.date},${row.status}`);
+      }
+
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="monohabit_export_${today}.csv"`);
+      res.send(lines.join('\n'));
+    } catch (err) {
+      console.error('Export error:', err);
+      res.status(500).json({ error: 'Export failed' });
+    }
+  });
+
   app.post('/api/seed', requireAuth, async (req: any, res) => {
     await db.query('DELETE FROM completions WHERE user_id = $1', [req.user.id]);
     await db.query('DELETE FROM habits WHERE user_id = $1', [req.user.id]);
