@@ -206,22 +206,13 @@ export const createApp = async () => {
         ? rawDate
         : today;
 
-      const habitsResult = await db.query(
-        'SELECT * FROM habits WHERE archived = 0 AND user_id = $1 ORDER BY created_at DESC',
-        [req.user.id]
-      );
-      const maxDateResult = await db.query(
-        'SELECT MAX(date) as max_date FROM completions WHERE user_id = $1',
-        [req.user.id]
-      );
-      const lastCompletionResult = await db.query(
-        'SELECT habit_id, MAX(date) as last_date FROM completions WHERE user_id = $1 GROUP BY habit_id',
-        [req.user.id]
-      );
-      const completionsResult = await db.query(
-        'SELECT habit_id, status FROM completions WHERE date = $1 AND user_id = $2',
-        [targetDate, req.user.id]
-      );
+      // Run all 4 queries in parallel
+      const [habitsResult, maxDateResult, lastCompletionResult, completionsResult] = await Promise.all([
+        db.query('SELECT * FROM habits WHERE archived = 0 AND user_id = $1 ORDER BY created_at DESC', [req.user.id]),
+        db.query('SELECT MAX(date) as max_date FROM completions WHERE user_id = $1', [req.user.id]),
+        db.query('SELECT habit_id, MAX(date) as last_date FROM completions WHERE user_id = $1 GROUP BY habit_id', [req.user.id]),
+        db.query('SELECT habit_id, status FROM completions WHERE date = $1 AND user_id = $2', [targetDate, req.user.id]),
+      ]);
 
       const maxDateStr = maxDateResult.rows[0]?.max_date;
       const lastCompletionMap = new Map(lastCompletionResult.rows.map((r: any) => [r.habit_id, r.last_date]));
@@ -389,45 +380,41 @@ export const createApp = async () => {
   });
 
   app.get('/api/stats', requireAuth, async (req: any, res) => {
-    // Heatmap: per-day completed count AND total tracked (for accurate % per day)
-    const heatmapResult = await db.query(
-      `SELECT date,
-         CAST(SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) AS INTEGER) as count,
-         CAST(COUNT(*) AS INTEGER) as total
-       FROM completions WHERE user_id = $1 GROUP BY date`,
-      [req.user.id]
-    );
+    // Run all independent queries in parallel
+    const [heatmapResult, habitsResult, lastCompletionResult, aggregatesResult] = await Promise.all([
+      // Per-day completed count (heatmap data)
+      db.query(
+        `SELECT date,
+           CAST(SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) AS INTEGER) as count,
+           CAST(COUNT(*) AS INTEGER) as total
+         FROM completions WHERE user_id = $1 GROUP BY date`,
+        [req.user.id]
+      ),
+      // All habits for denominator calculation
+      db.query(
+        'SELECT id, created_at, archived, archived_at FROM habits WHERE user_id = $1',
+        [req.user.id]
+      ),
+      // Last completion date per habit (for active habit detection)
+      db.query(
+        'SELECT habit_id, MAX(date) as last_date FROM completions WHERE user_id = $1 GROUP BY habit_id',
+        [req.user.id]
+      ),
+      // Aggregate stats in one query instead of three
+      db.query(
+        `SELECT
+           MAX(date) as max_date,
+           CAST(SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) AS INTEGER) as total_completed,
+           CAST(COUNT(*) AS INTEGER) as total_records
+         FROM completions WHERE user_id = $1`,
+        [req.user.id]
+      ),
+    ]);
 
-    // Fetch ALL habits (incl. archived) to compute the correct denominator per day.
-    // A habit was active on a date if: created_at <= date AND (archived_at IS NULL OR archived_at >= date)
-    const habitsResult = await db.query(
-      'SELECT id, created_at, archived, archived_at FROM habits WHERE user_id = $1',
-      [req.user.id]
-    );
-    const maxDateResult = await db.query(
-      'SELECT MAX(date) as max_date FROM completions WHERE user_id = $1',
-      [req.user.id]
-    );
-    const lastCompletionResult = await db.query(
-      'SELECT habit_id, MAX(date) as last_date FROM completions WHERE user_id = $1 GROUP BY habit_id',
-      [req.user.id]
-    );
-    const activeHabitsPerMonthResult = await db.query(`
-      SELECT SUBSTR(date, 1, 7) as month, COUNT(DISTINCT habit_id) as count
-      FROM completions
-      WHERE user_id = $1
-      GROUP BY SUBSTR(date, 1, 7)
-    `, [req.user.id]);
-    const totalCompletedResult = await db.query(
-      "SELECT COUNT(*) as count FROM completions WHERE user_id = $1 AND status = 'completed'",
-      [req.user.id]
-    );
-    const totalRecordsResult = await db.query(
-      'SELECT COUNT(*) as count FROM completions WHERE user_id = $1',
-      [req.user.id]
-    );
-
-    const maxDateStr = maxDateResult.rows[0]?.max_date || null;
+    const agg = aggregatesResult.rows[0] || {};
+    const maxDateStr: string | null = agg.max_date || null;
+    const totalCompleted = parseInt(agg.total_completed || '0');
+    const totalRecords = parseInt(agg.total_records || '0');
     const lastCompletionMap = new Map(lastCompletionResult.rows.map((r: any) => [r.habit_id, r.last_date]));
 
     let thresholdDateStr: string | null = null;
@@ -477,8 +464,6 @@ export const createApp = async () => {
       };
     });
 
-    const totalCompleted = parseInt(totalCompletedResult.rows[0]?.count || '0');
-    const totalRecords = parseInt(totalRecordsResult.rows[0]?.count || '0');
     const completionRate = totalRecords > 0 ? Math.round((totalCompleted / totalRecords) * 100) : 0;
 
     // Calculate current streak (only days with at least one completed habit)
@@ -510,7 +495,7 @@ export const createApp = async () => {
     res.json({
       heatmap: heatmapWithTotal,
       totalHabits: activeHabitsCount,
-      activeHabitsPerMonth: activeHabitsPerMonthResult.rows,
+      activeHabitsPerMonth: [],
       completionRate,
       currentStreak
     });

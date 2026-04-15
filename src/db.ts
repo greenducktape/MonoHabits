@@ -79,21 +79,19 @@ class SQLiteAdapter {
       CREATE INDEX IF NOT EXISTS idx_milestone_edges_user_id ON milestone_edges(user_id);
     `);
 
-    // Migrations
-    try { this.db.exec(`ALTER TABLE habits ADD COLUMN user_id INTEGER;`); } catch (e) {}
-    try { this.db.exec(`ALTER TABLE completions ADD COLUMN user_id INTEGER;`); } catch (e) {}
-    try { this.db.exec(`ALTER TABLE completions ADD COLUMN status TEXT DEFAULT 'completed';`); } catch (e) {}
-    try { this.db.exec(`ALTER TABLE users ADD COLUMN password TEXT;`); } catch (e) {}
-    try { this.db.exec(`ALTER TABLE users ADD COLUMN recovery_code TEXT;`); } catch (e) {}
-    try { this.db.exec(`ALTER TABLE users ADD COLUMN recovery_code_created_at TEXT;`); } catch (e) {}
-    try { this.db.exec(`ALTER TABLE habits ADD COLUMN archived_at TEXT;`); } catch (e) {}
-    // Backfill archived_at for already-archived habits using their last completion date
+    // Migrations — run each in its own try/catch since SQLite throws on duplicate columns
+    const migrations = [
+      `ALTER TABLE habits ADD COLUMN user_id INTEGER`,
+      `ALTER TABLE completions ADD COLUMN user_id INTEGER`,
+      `ALTER TABLE completions ADD COLUMN status TEXT DEFAULT 'completed'`,
+      `ALTER TABLE users ADD COLUMN password TEXT`,
+      `ALTER TABLE users ADD COLUMN recovery_code TEXT`,
+      `ALTER TABLE users ADD COLUMN recovery_code_created_at TEXT`,
+      `ALTER TABLE habits ADD COLUMN archived_at TEXT`,
+    ];
+    for (const sql of migrations) { try { this.db.exec(sql); } catch (e) {} }
     try {
-      this.db.exec(`
-        UPDATE habits SET archived_at = (
-          SELECT MAX(date) FROM completions WHERE habit_id = habits.id
-        ) WHERE archived = 1 AND archived_at IS NULL
-      `);
+      this.db.exec(`UPDATE habits SET archived_at = (SELECT MAX(date) FROM completions WHERE habit_id = habits.id) WHERE archived = 1 AND archived_at IS NULL`);
     } catch (e) {}
   }
 
@@ -218,24 +216,20 @@ class PostgresAdapter {
       await this.pool.query(`CREATE INDEX IF NOT EXISTS idx_milestones_user_id ON milestones(user_id);`);
       await this.pool.query(`CREATE INDEX IF NOT EXISTS idx_milestone_edges_user_id ON milestone_edges(user_id);`);
 
-      // Migrations
-      try { await this.pool.query(`ALTER TABLE habits ADD COLUMN user_id INTEGER;`); } catch (e) {}
-      try { await this.pool.query(`ALTER TABLE completions ADD COLUMN user_id INTEGER;`); } catch (e) {}
-      try { await this.pool.query(`ALTER TABLE completions ADD COLUMN status TEXT DEFAULT 'completed';`); } catch (e) {}
-      try { await this.pool.query(`ALTER TABLE users ADD COLUMN password TEXT;`); } catch (e) {}
-      try { await this.pool.query(`ALTER TABLE users ADD COLUMN recovery_code TEXT;`); } catch (e) {}
-      try { await this.pool.query(`ALTER TABLE users ADD COLUMN recovery_code_created_at TEXT;`); } catch (e) {}
-      try { await this.pool.query(`ALTER TABLE habits ADD COLUMN archived_at TEXT;`); } catch (e) {}
-      // Backfill archived_at for already-archived habits using their last completion date
-      try {
-        await this.pool.query(`
-          UPDATE habits SET archived_at = (
-            SELECT MAX(date) FROM completions WHERE habit_id = habits.id
-          ) WHERE archived = 1 AND archived_at IS NULL
-        `);
-      } catch (e) {}
-      // Add unique index on email for existing Postgres installs (safe: IF NOT EXISTS)
-      try { await this.pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users(email);`); } catch (e) {}
+      // All migrations in a single round trip using a DO block
+      await this.pool.query(`
+        DO $$ BEGIN
+          BEGIN ALTER TABLE habits ADD COLUMN user_id INTEGER; EXCEPTION WHEN duplicate_column THEN NULL; END;
+          BEGIN ALTER TABLE completions ADD COLUMN user_id INTEGER; EXCEPTION WHEN duplicate_column THEN NULL; END;
+          BEGIN ALTER TABLE completions ADD COLUMN status TEXT DEFAULT 'completed'; EXCEPTION WHEN duplicate_column THEN NULL; END;
+          BEGIN ALTER TABLE users ADD COLUMN password TEXT; EXCEPTION WHEN duplicate_column THEN NULL; END;
+          BEGIN ALTER TABLE users ADD COLUMN recovery_code TEXT; EXCEPTION WHEN duplicate_column THEN NULL; END;
+          BEGIN ALTER TABLE users ADD COLUMN recovery_code_created_at TEXT; EXCEPTION WHEN duplicate_column THEN NULL; END;
+          BEGIN ALTER TABLE habits ADD COLUMN archived_at TEXT; EXCEPTION WHEN duplicate_column THEN NULL; END;
+        END $$;
+        UPDATE habits SET archived_at = (SELECT MAX(date) FROM completions WHERE habit_id = habits.id) WHERE archived = 1 AND archived_at IS NULL;
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users(email);
+      `);
     } catch (error) {
       console.error('PostgresAdapter: Initialization failed:', error);
       throw error;
