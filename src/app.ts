@@ -264,7 +264,10 @@ export const createApp = async () => {
 
   app.post('/api/habits/:id/restore', requireAuth, async (req: any, res) => {
     const { id } = req.params;
-    await db.query('UPDATE habits SET archived = 0 WHERE id = $1 AND user_id = $2', [id, req.user.id]);
+    await db.query(
+      `UPDATE habits SET archived = 0, archived_at = NULL WHERE id = $1 AND user_id = $2`,
+      [id, req.user.id]
+    );
     res.json({ success: true });
   });
 
@@ -304,7 +307,10 @@ export const createApp = async () => {
 
   app.delete('/api/habits/:id', requireAuth, async (req: any, res) => {
     const { id } = req.params;
-    await db.query('UPDATE habits SET archived = 1 WHERE id = $1 AND user_id = $2', [id, req.user.id]);
+    await db.query(
+      `UPDATE habits SET archived = 1, archived_at = $1 WHERE id = $2 AND user_id = $3`,
+      [todayStr(), id, req.user.id]
+    );
     res.json({ success: true });
   });
 
@@ -392,10 +398,10 @@ export const createApp = async () => {
       [req.user.id]
     );
 
-    // Fetch ALL habits (incl. archived) so we can compute the correct denominator per day.
-    // A habit counts toward a day's total if it was created on or before that date.
+    // Fetch ALL habits (incl. archived) to compute the correct denominator per day.
+    // A habit was active on a date if: created_at <= date AND (archived_at IS NULL OR archived_at >= date)
     const habitsResult = await db.query(
-      'SELECT id, created_at, archived FROM habits WHERE user_id = $1',
+      'SELECT id, created_at, archived, archived_at FROM habits WHERE user_id = $1',
       [req.user.id]
     );
     const maxDateResult = await db.query(
@@ -443,7 +449,7 @@ export const createApp = async () => {
     // The completions table only records habits you explicitly touched, so using
     // COUNT(*) from completions gives total=completed on days you only marked some
     // habits, making every day look like 100%.
-    // Count of currently active habits (used as fallback denominator)
+    // Count of currently active habits (fallback denominator)
     const activeHabitCount = habitsResult.rows.filter((h: any) =>
       h.archived !== 1 && h.archived !== true && h.archived !== '1'
     ).length;
@@ -452,20 +458,21 @@ export const createApp = async () => {
       const dateStr: string = String(row.date).slice(0, 10);
       let habitsOnDate = 0;
       for (const h of habitsResult.rows) {
-        // Normalise archived: pg may return integer, boolean, or string
-        const isArchived = h.archived === 1 || h.archived === true || h.archived === '1';
-        if (isArchived) continue;
-        if (!h.created_at) continue;
         try {
           const createdStr = new Date(h.created_at).toISOString().slice(0, 10);
-          if (createdStr <= dateStr) habitsOnDate++;
-        } catch { /* skip malformed date */ }
+          if (createdStr > dateStr) continue; // created after this date
+          // Habit was active on dateStr if it had not yet been archived
+          // archived_at is either NULL (still active) or the date it was archived
+          if (h.archived_at) {
+            const archivedStr = new Date(h.archived_at).toISOString().slice(0, 10);
+            if (archivedStr < dateStr) continue; // already archived before this date
+          }
+          habitsOnDate++;
+        } catch { /* skip malformed dates */ }
       }
       return {
         date: row.date,
         count: Number(row.count),
-        // Use the per-day habit count; fall back to current active count if
-        // something goes wrong (never fall back to the completions-table count)
         total: habitsOnDate > 0 ? habitsOnDate : activeHabitCount,
       };
     });
@@ -666,12 +673,16 @@ export const createApp = async () => {
       return res.status(400).json({ error: 'Invalid date format' });
     }
     try {
-      // LEFT JOIN so habits with no completion record on this date appear as 'pending'
+      // LEFT JOIN so habits with no completion record on this date appear as 'pending'.
+      // A habit belongs on this date if it was created on or before it, and either
+      // not yet archived or archived on/after this date.
       const result = await db.query(
         `SELECT h.title, COALESCE(c.status, 'pending') as status
          FROM habits h
          LEFT JOIN completions c ON c.habit_id = h.id AND c.date = $1 AND c.user_id = $2
-         WHERE h.user_id = $2 AND h.archived = 0
+         WHERE h.user_id = $2
+           AND SUBSTR(CAST(h.created_at AS TEXT), 1, 10) <= $1
+           AND (h.archived_at IS NULL OR h.archived_at >= $1)
          ORDER BY h.title ASC`,
         [date, req.user.id]
       );

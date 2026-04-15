@@ -86,6 +86,15 @@ class SQLiteAdapter {
     try { this.db.exec(`ALTER TABLE users ADD COLUMN password TEXT;`); } catch (e) {}
     try { this.db.exec(`ALTER TABLE users ADD COLUMN recovery_code TEXT;`); } catch (e) {}
     try { this.db.exec(`ALTER TABLE users ADD COLUMN recovery_code_created_at TEXT;`); } catch (e) {}
+    try { this.db.exec(`ALTER TABLE habits ADD COLUMN archived_at TEXT;`); } catch (e) {}
+    // Backfill archived_at for already-archived habits using their last completion date
+    try {
+      this.db.exec(`
+        UPDATE habits SET archived_at = (
+          SELECT MAX(date) FROM completions WHERE habit_id = habits.id
+        ) WHERE archived = 1 AND archived_at IS NULL
+      `);
+    } catch (e) {}
   }
 
   async query(text: string, params: any[] = []): Promise<QueryResult> {
@@ -216,6 +225,15 @@ class PostgresAdapter {
       try { await this.pool.query(`ALTER TABLE users ADD COLUMN password TEXT;`); } catch (e) {}
       try { await this.pool.query(`ALTER TABLE users ADD COLUMN recovery_code TEXT;`); } catch (e) {}
       try { await this.pool.query(`ALTER TABLE users ADD COLUMN recovery_code_created_at TEXT;`); } catch (e) {}
+      try { await this.pool.query(`ALTER TABLE habits ADD COLUMN archived_at TEXT;`); } catch (e) {}
+      // Backfill archived_at for already-archived habits using their last completion date
+      try {
+        await this.pool.query(`
+          UPDATE habits SET archived_at = (
+            SELECT MAX(date) FROM completions WHERE habit_id = habits.id
+          ) WHERE archived = 1 AND archived_at IS NULL
+        `);
+      } catch (e) {}
       // Add unique index on email for existing Postgres installs (safe: IF NOT EXISTS)
       try { await this.pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users(email);`); } catch (e) {}
     } catch (error) {
