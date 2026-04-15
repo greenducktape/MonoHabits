@@ -446,13 +446,14 @@ export const createApp = async () => {
     const heatmapWithTotal = heatmapResult.rows.map((row: any) => {
       const dateStr: string = String(row.date).slice(0, 10);
       const habitsOnDate = habitsResult.rows.filter((h: any) => {
-        const created = h.created_at ? String(h.created_at).slice(0, 10) : null;
+        // created_at comes back as a JS Date from pg, so use new Date() to normalise
+        const created = h.created_at ? new Date(h.created_at).toISOString().slice(0, 10) : null;
         return created && created <= dateStr;
       }).length;
       return {
         date: row.date,
         count: Number(row.count),
-        total: habitsOnDate || Number(row.total), // fallback to DB total if no habits found
+        total: habitsOnDate > 0 ? habitsOnDate : Number(row.total),
       };
     });
 
