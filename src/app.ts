@@ -445,8 +445,10 @@ export const createApp = async () => {
     // habits, making every day look like 100%.
     const heatmapWithTotal = heatmapResult.rows.map((row: any) => {
       const dateStr: string = String(row.date).slice(0, 10);
+      // Only count non-archived habits — we don't track archived_at, so archived
+      // habits would inflate the denominator for all past days.
       const habitsOnDate = habitsResult.rows.filter((h: any) => {
-        // created_at comes back as a JS Date from pg, so use new Date() to normalise
+        if (h.archived) return false;
         const created = h.created_at ? new Date(h.created_at).toISOString().slice(0, 10) : null;
         return created && created <= dateStr;
       }).length;
