@@ -595,19 +595,40 @@ export const createApp = async () => {
       const uniqueTitles = [...new Set(validItems.map(i => i.title))];
       const titleParams = uniqueTitles.map((_, i) => `$${i + 2}`).join(', ');
       const existingHabits = await db.query(
-        `SELECT id, title FROM habits WHERE user_id = $1 AND title IN (${titleParams})`,
+        `SELECT id, title, created_at FROM habits WHERE user_id = $1 AND title IN (${titleParams})`,
         [userId, ...uniqueTitles]
       );
       const habitMap = new Map<string, number>(existingHabits.rows.map((h: any) => [h.title, Number(h.id)]));
 
-      // 3. Insert missing habits (one per new title, but no SELECT first)
+      // Build a map of title → earliest date in this CSV (used as created_at for new habits,
+      // and to backfill created_at for existing habits whose stored date is too late)
+      const earliestDateByTitle = new Map<string, string>();
+      for (const item of validItems) {
+        const cur = earliestDateByTitle.get(item.title);
+        if (!cur || item.date < cur) earliestDateByTitle.set(item.title, item.date);
+      }
+
+      // 3. Insert missing habits using earliest CSV date as created_at
       for (const title of uniqueTitles.filter(t => !habitMap.has(t))) {
+        const createdAt = earliestDateByTitle.get(title) ?? todayStr();
         const result = await db.query(
-          'INSERT INTO habits (user_id, title, frequency) VALUES ($1, $2, $3) RETURNING id',
-          [userId, title, 'daily']
+          'INSERT INTO habits (user_id, title, frequency, created_at) VALUES ($1, $2, $3, $4) RETURNING id',
+          [userId, title, 'daily', createdAt]
         );
         const newId = Number(result.lastInsertRowid ?? result.rows[0]?.id);
         habitMap.set(title, newId);
+      }
+
+      // Backfill created_at for existing habits if the CSV shows an earlier date
+      for (const h of existingHabits.rows) {
+        const storedDate = h.created_at ? new Date(h.created_at).toISOString().slice(0, 10) : todayStr();
+        const csvEarliest = earliestDateByTitle.get(h.title);
+        if (csvEarliest && csvEarliest < storedDate) {
+          await db.query(
+            'UPDATE habits SET created_at = $1 WHERE id = $2',
+            [csvEarliest, Number(h.id)]
+          );
+        }
       }
 
       // 4. One query to fetch all relevant existing completions
@@ -658,6 +679,14 @@ export const createApp = async () => {
       for (const u of toUpdate) {
         await db.query('UPDATE completions SET status = $1 WHERE id = $2', [u.status, u.id]);
       }
+
+      // 8. Backfill archived_at for archived habits that still have NULL archived_at.
+      //    Use their last completion date as the best estimate of when they stopped.
+      await db.query(`
+        UPDATE habits SET archived_at = (
+          SELECT MAX(date) FROM completions WHERE habit_id = habits.id
+        ) WHERE user_id = $1 AND archived = 1 AND archived_at IS NULL
+      `, [userId]);
 
       res.json({ success: true, count: toInsert.length + toUpdate.length });
     } catch (error) {
